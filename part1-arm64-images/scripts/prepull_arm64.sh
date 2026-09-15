@@ -24,6 +24,10 @@
 # dependency at all.
 set -u
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PART="$(cd "$HERE/.." && pwd)"
+set -a; . "$PART/../config.env"; set +a
+
 LIST="${1:?usage: prepull_arm64.sh <instance-id-list> }"
 PER_HOUR="${PER_HOUR:-90}"
 CONC="${CONC:-6}"
