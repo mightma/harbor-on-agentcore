@@ -1,0 +1,19 @@
+[project]
+name = "part4-train"
+version = "0.1.0"
+description = "GRPO on SWE-smith with SkyRL, AgentCore Runtime sandboxes, SWE-bench Verified as the held-out eval"
+requires-python = ">=3.12"
+
+# This is the *helper* environment, not the training environment.
+#
+# Training runs inside SkyRL's own uv project, because the entrypoint
+# (examples.train_integrations.harbor.entrypoints.main_harbor) lives in the SkyRL
+# repo and is launched with `uv run --extra fsdp --extra harbor` from there. That
+# venv holds torch, vllm and ray, and scripts/setup_skyrl.sh creates it after
+# repointing SkyRL's Harbor pin at the kit branch.
+#
+# What this environment is for: the setup and task-set scripts, and checking that
+# the trial config is valid before paying for a step of rollouts.
+dependencies = [
+    "harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit",
+]

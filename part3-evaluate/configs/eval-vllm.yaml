@@ -1,0 +1,71 @@
+# Harbor job: evaluate a locally served policy on the arm64 slice of SWE-bench
+# Verified, with every trial's sandbox an AgentCore Runtime session.
+#
+# Used by scripts/run_eval_vllm.sh, which serves the model with vLLM on this instance's
+# H100s and then points this job at it. The agent is Terminus-2 running in the
+# local harbor process; only the shell commands it issues cross into the sandbox,
+# so the sandbox never needs to reach the vLLM endpoint and no credentials or
+# gateway addresses are injected into it.
+#
+# scripts/run_eval_vllm.sh overrides model_name, api_base, n_concurrent_trials and the
+# task paths on the command line; everything else lives here so that the eval and
+# the RL rollouts (part4-train/configs/harbor_trial_acr.yaml) cannot silently drift apart.
+
+n_attempts: 1
+
+environment:
+  type: agentcore
+  force_build: false
+  delete: true
+  kwargs:
+    # Tasks that share an image share a runtime. Part 2 deployed them under this
+    # same key; omitting it here would deploy a second, per-task set.
+    share_by_content: true
+    # Keep each task's runtime deployed after its trial finishes. One runtime is
+    # created per task image; re-running the same slice then skips both the ECR
+    # push and the deployment wait. part2's scripts/cleanup_runtimes.py removes them after.
+    delete_runtime: false
+    # Keep the pulled arm64 base images and the built task tags in the local
+    # store. Unlike the terminal-bench run, these bases cost Docker Hub quota to
+    # re-acquire (part1's scripts/prepull_arm64.sh), so throwing them away is expensive.
+    prune_local_images: false
+    # A SWE-bench test suite can sit in a single pytest invocation for a long
+    # time; give a command that Harbor does not time itself the service maximum.
+    exec_timeout_sec: 3600
+
+agents:
+  - name: terminus-2
+    model_name: hosted_vllm/PLACEHOLDER
+    kwargs:
+      api_base: http://127.0.0.1:8000/v1
+      # Same turn budget and context window as the RL rollouts, so the eval
+      # number is comparable to the training reward rather than to a different
+      # scaffold. See the part 3 README for why 8 turns needs a 32k window:
+      # max_model_len >= max_turns * (10 KB observation + output cap) + 2k.
+      max_turns: 8
+      suppress_max_turns_warning: true
+      enable_summarize: false
+      temperature: 0.0
+      model_info:
+        max_input_tokens: 32768
+        max_output_tokens: 2048
+        input_cost_per_token: 0.0
+        output_cost_per_token: 0.0
+      llm_kwargs:
+        timeout: 900
+        max_retries: 0
+        # Qwen3.5 is a thinking model and reasons by default: an untouched
+        # "Reply with exactly: ok" spends its whole budget on a "Thinking
+        # Process:" preamble. Terminus-2 needs a parseable command every turn
+        # inside max_output_tokens, so reasoning is switched off at the chat
+        # template. harbor's LiteLLM wrapper deep-merges extra_body, so this
+        # coexists with the return_token_ids it adds for rollout details.
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: false
+
+verifier:
+  # Capping the agent is not enough. psf__requests suites make network calls and
+  # hang; the task's own [verifier] timeout_sec is 3000, so one such trial would
+  # otherwise hold an AgentCore session for 50 minutes. See the part 3 README.
+  override_timeout_sec: 600

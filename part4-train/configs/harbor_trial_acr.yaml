@@ -1,0 +1,95 @@
+# @package harbor_trial_config
+#
+# Harbor TrialConfig for SWE-bench rollouts where each rollout's sandbox is an
+# AgentCore Runtime session. Copied over SkyRL's
+# examples/train_integrations/harbor/harbor_trial_config/default.yaml by
+# scripts/run_train.sh (SkyRL always merges that file and then applies CLI
+# overrides, so replacing it is the way to change the defaults).
+#
+# SkyRL injects at runtime: task.path, agent.model_name, agent.kwargs.api_base,
+# agent.kwargs.session_id.
+#
+# Differences from the local-Docker variant (the single-L40S, local-Docker
+# version) and why:
+#
+#   environment.type: agentcore, not docker. This is the point of the run. On one
+#     box the rollout concurrency ceiling is CPU: at 2 CPUs per container, 192
+#     vCPU tops out near 90 containers and the disk is shared. AgentCore gives
+#     each rollout its own 2 vCPU / 8 GB microVM, so the ceiling moves off this
+#     host entirely and onto the service's session-creation rate (25/s).
+#
+#   No override_cpus / override_memory_mb. A session's shape is fixed at 2 vCPU /
+#     8 GB and the provider reports cpu/memory as unenforceable, so setting them
+#     would only produce override warnings. Note this is *less* memory than the
+#     4096 MB the Docker version asks for, and the microVM disk is 8.8 GB against
+#     a ~2.8 GB task image — enough for these suites, but not much slack.
+#
+#   max_turns 8, not 12, matching part3-evaluate/configs/eval-vllm.yaml so the training reward
+#     and the eval number describe the same scaffold. See the part 3 README for the
+#     context arithmetic behind 8 turns at 32k.
+
+# Overridden by scripts/run_train.sh to $KIT_WORK_DIR/runs/<name>/trials.
+trials_dir: ./trials
+
+timeout_multiplier: 1.0
+
+agent:
+  name: terminus-2
+  override_timeout_sec: 900
+
+  kwargs:
+    max_turns: 8
+    suppress_max_turns_warning: true
+    enable_summarize: false
+    # Required for step-wise training: makes Terminus return per-turn token ids
+    # and logprobs in agent_result.rollout_details. Without it the trainer only
+    # gets text, and re-tokenizing text introduces drift.
+    collect_rollout_details: true
+    temperature: 1.0
+
+    model_info:
+      # Must match generator.inference_engine.engine_init_kwargs.max_model_len.
+      max_input_tokens: 32768
+      max_output_tokens: 2048
+      input_cost_per_token: 0.0
+      output_cost_per_token: 0.0
+
+    llm_kwargs:
+      timeout: 900
+      max_retries: 0
+      top_p: 1.0
+      top_k: -1
+      min_p: 0.0
+      # Reasoning off, same as the eval. Two reasons here rather than one: the
+      # turn would not fit in max_output_tokens, and every thinking token would
+      # otherwise become a trained token inside a 32k budget that has to hold
+      # eight 10 KB observations.
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
+environment:
+  type: agentcore
+  suppress_override_warnings: true
+  kwargs:
+    # Tasks sharing an image share a runtime: 44,489 SWE-smith tasks resolve to
+    # 119 runtimes instead of 44,489. Without this the account's 1,000-runtime
+    # quota is gone within one epoch.
+    share_by_content: true
+    # One runtime per task image, kept when the task's last
+    # trial finishes. In RL the same task comes back every epoch, so deleting
+    # would mean re-pushing and re-deploying it each time; keep them and clean up
+    # with part2's scripts/cleanup_runtimes.py after the run.
+    delete_runtime: false
+    # The arm64 bases cost Docker Hub quota to re-acquire (part1's scripts/prepull_arm64.sh),
+    # so do not drop the local tags after pushing.
+    prune_local_images: false
+    exec_timeout_sec: 3600
+
+verifier:
+  disable: false
+  # See the part 3 README: capping the agent is not enough. A hanging test suite
+  # holds its slot for the task's own 3000s verifier timeout, and one stalled
+  # rollout delays the whole GRPO step because a step cannot close until every
+  # trajectory in it is in.
+  override_timeout_sec: 600

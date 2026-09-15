@@ -1,0 +1,38 @@
+[project]
+name = "part1-arm64-images"
+version = "0.1.0"
+description = "Build arm64 task images and Harbor task directories for SWE-smith and SWE-bench Verified"
+requires-python = ">=3.13"
+
+# swesmith and swebench are pinned, not floated, and both pins are load-bearing:
+#
+#   swesmith 0.0.6  must match harbor/adapters/swesmith, because the image names
+#                   this builds are the names that adapter's generated tasks
+#                   reference. A different swesmith renames the images and the
+#                   tasks point at nothing.
+#   swebench 4.1.0  the adapter imports LATEST from swebench.harness.constants,
+#                   which 5.x removed.
+dependencies = [
+    "swesmith==0.0.6",
+    "swebench==4.1.0",
+    "datasets>=4.0.0",
+    "toml==0.10.2",
+    "docker>=7.1.0",
+    "boto3>=1.43.48",
+    "pandas>=2.0",
+    "requests>=2.32",
+    # The two Harbor adapters, installed as packages from the kit branch so the
+    # SWE-smith patch fix and the SWE-bench --arch flag are both present. See the
+    # top-level README for what each carries.
+    "harbor-swesmith-adapter @ git+https://github.com/mightma/harbor@acr-kit#subdirectory=adapters/swesmith",
+    "harbor-swebench-adapter @ git+https://github.com/mightma/harbor@acr-kit#subdirectory=adapters/swebench",
+]
+
+[dependency-groups]
+dev = ["pytest>=9.0.3"]
+
+[tool.uv]
+# swesmith 0.0.6 and swebench 4.1.0 disagree about transitive pins; neither
+# conflict affects the code paths used here (image naming and test-command
+# generation).
+override-dependencies = []

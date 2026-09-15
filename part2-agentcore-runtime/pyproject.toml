@@ -1,0 +1,15 @@
+[project]
+name = "part2-agentcore-runtime"
+version = "0.1.0"
+description = "Deploy one AgentCore Runtime per task image, and drive a session by hand"
+requires-python = ">=3.12"
+
+# Harbor from the kit branch, not PyPI: released Harbor has no `agentcore` in
+# EnvironmentType, and no share_by_content. See the top-level README for the five
+# commits this ref carries.
+#
+# The [agentcore] extra is boto3 >= 1.43.48 (InvokeAgentRuntimeCommand, the
+# sandbox exec primitive, landed there) plus dockerfile-parse.
+dependencies = [
+    "harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit",
+]

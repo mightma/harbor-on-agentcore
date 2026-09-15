@@ -1,0 +1,20 @@
+# Your filled-in config: holds an account id and a role ARN. Share
+# config.env.example, never this.
+config.env
+
+# Per-part uv environments. Each part recreates its own with `uv sync`.
+*/.venv/
+
+# Note: */uv.lock IS committed on purpose. The Harbor dependency is a git ref, so
+# without the locks two people running `uv sync` a month apart get different
+# resolutions of everything downstream of it.
+
+__pycache__/
+*.pyc
+
+# Job output, generated task dirs, image build roots -- everything under
+# $KIT_WORK_DIR. Kept out in case anyone points KIT_WORK_DIR inside the kit.
+work/
+runs/
+jobs/
+state/

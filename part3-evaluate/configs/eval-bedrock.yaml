@@ -1,0 +1,67 @@
+# Harbor job: evaluate a Bedrock model on the arm64 slice of SWE-bench Verified,
+# with every trial's sandbox an AgentCore Runtime session.
+#
+# Driven by scripts/run_eval_bedrock.sh, which substitutes the model id.
+#
+# The scaffold here is deliberately identical to configs/eval-vllm.yaml -- same
+# agent, same turn budget, same context window, same verifier timeout -- so the
+# two numbers this part produces are comparable to each other. If you change one,
+# change both, or you are comparing scaffolds rather than models.
+#
+# Why terminus-2 and not claude-code:
+#
+#   terminus-2 is an *internal* agent. It runs in the local harbor process and
+#   only the shell commands it decides on cross into the sandbox. The Bedrock call
+#   goes out from *this host* using its own credentials, so the sandbox needs no
+#   AWS identity and the execution role needs no bedrock:InvokeModel.
+#
+#   claude-code is an *installed* agent: Harbor installs the CLI inside the
+#   sandbox and the model call originates there, which requires
+#   CLAUDE_CODE_USE_BEDROCK=1 and an execution role allowed to invoke Bedrock.
+#   That path works (it is how the terminal-bench runs were done) but it changes
+#   both the scaffold and the trust boundary, so it is not what you want for a
+#   like-for-like comparison against a locally served policy.
+
+n_attempts: 1
+
+environment:
+  type: agentcore
+  force_build: false
+  delete: true
+  kwargs:
+    # Runtimes were deployed in part 2; keep them. Re-running this slice then
+    # skips both the ECR push and the deployment wait.
+    delete_runtime: false
+    # Without this, tasks sharing an image still get one runtime each.
+    share_by_content: true
+    # The arm64 bases cost Docker Hub quota to re-acquire; do not drop local tags.
+    prune_local_images: false
+    # A SWE-bench suite can sit in one pytest invocation for a long time. This is
+    # the service maximum and Harbor does not time the command itself.
+    exec_timeout_sec: 3600
+
+agents:
+  - name: terminus-2
+    model_name: bedrock/PLACEHOLDER
+    kwargs:
+      # 8 turns at a 32k window is not arbitrary:
+      #   max_model_len >= max_turns * (10 KB observation + output cap) + 2k
+      # At 16k and 12 turns, 15 of 17 attempts died on context length.
+      max_turns: 8
+      suppress_max_turns_warning: true
+      # SkyRL's step-wise path rejects summarisation, and part 4 shares this
+      # scaffold; keeping it off here keeps the two comparable.
+      enable_summarize: false
+      temperature: 0.0
+      model_info:
+        max_input_tokens: 32768
+        max_output_tokens: 4096
+      llm_kwargs:
+        timeout: 900
+        max_retries: 2
+
+verifier:
+  # Capping the agent is not enough. Some psf__requests suites make network calls
+  # and hang; the task's own [verifier] timeout_sec is 3000, so one such trial
+  # would hold an AgentCore session for 50 minutes.
+  override_timeout_sec: 600

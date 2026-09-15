@@ -1,0 +1,21 @@
+[project]
+name = "part3-evaluate"
+version = "0.1.0"
+description = "Evaluate a model on SWE-bench Verified arm64 with AgentCore Runtime sandboxes"
+requires-python = ">=3.12"
+
+dependencies = [
+    # Harbor from the kit branch; released Harbor has no agentcore provider.
+    "harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit",
+    # Reporting only. Results are written to disk regardless; wandb is optional at
+    # runtime (scripts skip it when WANDB_API_KEY is unset).
+    "wandb>=0.27",
+]
+
+[project.optional-dependencies]
+# Only the vLLM path needs this, and it is a multi-GB install. Skip it entirely if
+# you are evaluating a Bedrock model, or point $VLLM at an existing install (for
+# example part 4's SkyRL venv) and skip it anyway.
+#
+#   uv sync --extra serve
+serve = ["vllm>=0.11.0"]
