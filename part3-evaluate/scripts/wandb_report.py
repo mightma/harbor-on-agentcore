@@ -22,19 +22,16 @@ from pathlib import Path
 
 from summarize import load  # same directory; keeps one parser for trial results
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _load_api_key() -> None:
-    if os.environ.get("WANDB_API_KEY"):
-        return
-    env_file = REPO_ROOT / "rl" / ".env"
-    if not env_file.exists():
-        return
-    for line in env_file.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("WANDB_API_KEY="):
-            os.environ["WANDB_API_KEY"] = line.split("=", 1)[1].strip()
+def _have_api_key() -> bool:
+    """Reporting is optional; results are on disk either way.
+
+    The key comes from the environment, which config.env exports. Returning False
+    rather than raising keeps a finished eval from looking like a failed one just
+    because nobody set up wandb.
+    """
+    return bool(os.environ.get("WANDB_API_KEY"))
 
 
 def main() -> None:
@@ -48,7 +45,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    _load_api_key()
+    if not _have_api_key():
+        print("WANDB_API_KEY unset; skipping upload (results remain on disk)")
+        return
     if not os.environ.get("WANDB_API_KEY"):
         raise SystemExit("No WANDB_API_KEY in the environment or rl/.env")
 
