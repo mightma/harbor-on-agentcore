@@ -34,35 +34,49 @@ N_CONCURRENT="${2:-16}"
 
 export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
 
-# One task per image: tasks of a repository share a docker_image, so grouping by
-# it picks a representative and keeps this pass as long as the image count, not
-# the task count.
+# The two task sets in this kit have different shapes, and the difference decides
+# how many trials this pass needs:
+#
+#   SWE-smith   task.toml sets [environment].docker_image and environment/ is
+#               empty. Every task of a repository names the same image, so they
+#               share one runtime and one representative task gates all of them.
+#               119 trials cover 44,489 tasks.
+#
+#   SWE-bench   each task has its own environment/Dockerfile and no
+#               docker_image. Every task is its own environment, so there is
+#               nothing to group by and every task needs its own trial.
+#               70 trials cover 70 tasks.
+#
+# Grouping by docker_image and finding none used to abort with "generate them in
+# part 1 first", which was wrong and actively misleading: the tasks were there.
 mapfile -t PICKED < <(
   "$PART/.venv/bin/python" - "$TASK_ROOT" "${REPO_PREFIXES:-}" <<'PY'
 import sys, re, pathlib
 root = pathlib.Path(sys.argv[1])
 prefixes = tuple(p.lower() for p in sys.argv[2].split(",") if p)
-by_image = {}
+shared, per_task = {}, []
 for toml_path in sorted(root.glob("*/task.toml")):
     name = toml_path.parent.name
     if prefixes and not name.lower().startswith(prefixes):
         continue
     m = re.search(r'^\s*docker_image\s*=\s*"([^"]+)"', toml_path.read_text(), re.M)
-    if not m:
-        continue
-    by_image.setdefault(m.group(1), name)
-for name in by_image.values():
+    if m:
+        shared.setdefault(m.group(1), name)
+    else:
+        per_task.append(name)
+# A task set is one shape or the other; if it somehow mixes, cover both.
+for name in list(shared.values()) + per_task:
     print(name)
 PY
 )
 
 if [ "${#PICKED[@]}" -eq 0 ]; then
-  echo "no tasks with [environment].docker_image under $TASK_ROOT" >&2
-  echo "generate them in part 1 first" >&2
+  echo "no task.toml files under $TASK_ROOT" >&2
+  echo "generate the task set in part 1 first" >&2
   exit 1
 fi
 
-echo "deploying ${#PICKED[@]} runtimes (one per image) at -n $N_CONCURRENT"
+echo "deploying ${#PICKED[@]} runtimes at -n $N_CONCURRENT"
 
 include_flags=()
 for name in "${PICKED[@]}"; do
