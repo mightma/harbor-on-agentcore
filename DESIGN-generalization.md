@@ -116,10 +116,36 @@ Does your dataset publish arm64 images?
     └── nothing shared                         -> one image per task; check the 1,000 quota
 ```
 
-**Change 3 — a `--group-by` mode for SWE-bench task generation**, so the 40-runtime
-layout is a flag rather than a rewrite, and a documented "hybrid" recommendation: share
-the small env groups (median size 4), keep per-instance images for the large ones (75,
-44, 43) where the shared image cannot hold every tree anyway.
+### Decision: SWE-bench Verified stays per-task. Document the alternative, do not ship it.
+
+**\[decided\]** Build one image per instance. The 40-runtime layout trades a one-time
+build cost for a recurring per-session cost, and that is the wrong trade for a benchmark
+you run repeatedly:
+
+| | per-task images (**chosen**) | group by `env_image_key` |
+|---|---|---|
+| Images to build | 500 | 40 |
+| Runtimes | 500 | **40** |
+| Build cost | one-off, parallel, cacheable | one-off, 12× smaller |
+| **Session start** | **~3 s** | clone + reset + scrub + `pip install -e .[test]` — **minutes, every trial, forever** |
+| Large env groups (75/44/43 instances) | fine | shared image cannot hold every tree anyway → hybrid needed |
+| Benchmark validity | scrub is baked in, done once | scrub must be redone per session or the agent sees future commits |
+
+An eval pass is 70–500 trials and gets repeated across models and checkpoints; RL
+multiplies it by epochs. Paying minutes per trial to save a one-time build is a bad
+exchange, and it also erodes the property this whole substrate is chosen for — the
+measured 3 s warm start.
+
+**Change 3 (revised) — do not implement grouping for SWE-bench.** Instead, document the
+comparison above in `part1/README.md` as the worked example of the sharing-granularity
+method, and state the rule it illustrates:
+
+> Share when the per-task delta is *local and constant* (SWE-smith: `git checkout`, ~0 s).
+> Do not share when it is *work* (SWE-bench: an editable install). The grouping that
+> minimises runtime count is not automatically the grouping you want.
+
+Keep `share_tasks()` from Change 1 general anyway — a customer whose dataset has a cheap
+per-task delta needs it, and SWE-smith already does.
 
 ### Completing SWE-bench Verified to 500
 
@@ -161,22 +187,39 @@ missing is the general statement and how to test your own harness against it.
 | verifier | 76.6 s (20.2%) | 13.0 s (14.1%) |
 | total | 379 s | 92 s |
 
-51 s × 70 trials ≈ 1 hour of pure `npm install` per eval pass. For a customer who
-evaluates on a *fixed* harness, that is pure waste.
+51 s × 70 trials ≈ 1 hour of pure `npm install` per eval pass. **And terminus-2 is not
+free either — 12.0 s × 70 ≈ 14 minutes**, which is worth reclaiming even though it is the
+demo harness.
 
 **It works, because Harbor's install is idempotent.**
 `claude_code.py:410` `_installed_claude_satisfies_version()` short-circuits with
 *"Claude Code is already available at the requested version"*. Bake the CLI into the
 prepared image and Harbor skips the install.
 
-**Change 6 — an optional harness layer in the image prepare step.**
-`prepare_swesmith_images.py` already bakes git, uv, `/logs` and every task branch; add an
-opt-in `--bake-harness <spec>` that appends the harness install to the same Dockerfile.
-Ship one recipe per harness and document how to add another.
+**\[decided\]** terminus-2 remains the harness for the demo paths (parts 3 and 4), since
+it is the only one that is both evaluable and trainable. Baking is an **option**, not the
+default, so the un-baked path stays the reference.
 
-Two caveats to document with it: the baked version must satisfy the config's `version`
-or Harbor reinstalls anyway; and every baked harness costs image size against the
-2048 MB compressed ceiling.
+**Change 6 (revised) — `--bake-harness <name>` in the image prepare step, covering
+terminus-2 as well as installed harnesses.** `prepare_swesmith_images.py` already bakes
+git, uv, `/logs` and every task branch; this appends a harness layer to the same
+Dockerfile. Ship a recipe per harness and document the shape so a customer can add
+theirs:
+
+| Harness | What the layer installs | Reclaimed per trial (**\[measured\]** median) |
+|---|---|---|
+| `terminus-2` | its runtime deps, so agent setup is upload-only | **12.0 s** |
+| `claude-code` | `npm install -g @anthropic-ai/claude-code` (+ node) | **51.3 s** |
+| `mini-swe-agent` | its pip package | not yet measured |
+
+Three caveats to document with it:
+
+- the baked version must satisfy the config's `version` or Harbor reinstalls anyway,
+  silently undoing the saving;
+- each baked harness costs image size against the 2048 MB compressed ceiling, so baking
+  several into one image is not free;
+- a baked image is harness-specific, which cuts against sharing one image set across
+  experiments — worth a separate tag rather than replacing the base one.
 
 ---
 
@@ -235,10 +278,56 @@ decide which tokens belong to which trajectory's advantage. `RolloutDetail`'s ow
 docstring concedes the class ("agents with subagents, summarization, or other non-linear
 chat histories").
 
-On the network path: this host has a public IP, so it is *possible*, but it means exposing
-the vLLM endpoint. Prefer the proxy at an AWS-internal address over opening a host port,
-and document that this reverses the current posture where the sandbox needs no inbound
-path at all.
+### The network path needs no new code — VPC mode already exists on both sides
+
+This is the part of the original proposal that was wrong, and it makes Change 8 much
+smaller. **\[verified\]** AgentCore Runtime takes a network configuration:
+
+```
+CreateAgentRuntime.networkConfiguration
+  networkMode      enum: ['PUBLIC', 'VPC']
+  networkModeConfig  { securityGroups: list, subnets: list, requireServiceS3Endpoint: bool }
+```
+
+and **Harbor's provider already exposes it** — `environment.py:171-172` accepts
+`network_mode`, `subnets` and `security_groups`, defaulting to `PUBLIC`. So placing the
+sandbox in the same VPC as the training host is configuration, not development:
+
+```yaml
+environment:
+  type: agentcore
+  kwargs:
+    network_mode: VPC
+    subnets: subnet-...          # the host's subnet, or any in its VPC
+    security_groups: sg-...      # must allow inbound to the vLLM port from the sandbox
+```
+
+The sandbox then reaches the host on its **private** address, and nothing is exposed to the
+internet — strictly better than the public-IP route the first draft assumed. Two things to
+document:
+
+- **This reverses the current security posture.** Today the sandbox needs no inbound path
+  and no credentials; VPC mode plus a listening vLLM means the code under test can reach a
+  host service. Scope the security group to the one port, and remember the sandbox also
+  still holds the execution role.
+- **`requireServiceS3Endpoint`** exists because a VPC-mode sandbox may lose the default
+  route to AWS services. If the sandbox needs ECR or S3, the VPC needs the corresponding
+  endpoints, or image pulls start failing in a way that looks like a build error.
+
+**Change 8 (revised) — the proxy is the only new component; the transport is config.**
+Target `mini-swe-agent`, point its `OPENAI_BASE_URL` at the proxy, run the proxy on the
+host beside vLLM, and connect the two with VPC mode. Scope:
+
+| Piece | Status |
+|---|---|
+| Sandbox → host transport | **exists** (`network_mode: VPC`, no code) |
+| Pointing the harness at an endpoint | **exists** (`base_url_envs` injection, no code) |
+| Recording proxy: forward, add `logprobs`/`return_token_ids`, accumulate `RolloutDetail` | **to build** |
+| Attaching `RolloutDetail` to the trial result so SkyRL sees it | **to build** — the seam to design |
+
+That last row is the real unknown: Harbor populates `agent_result.rollout_details` from its
+own LLM layer, so a proxy-sourced version has to reach the same field for an installed
+harness. It is the part worth prototyping before promising anything.
 
 **Change 9 — part 3 and part 4 grow a "bring your own model" section**: the provider
 prefix rule (`bedrock/`, `hosted_vllm/`, …), that `CLAUDE_CODE_USE_BEDROCK` is an
@@ -251,20 +340,36 @@ prefix rule (`bedrock/`, `hosted_vllm/`, …), that `CLAUDE_CODE_USE_BEDROCK` is
 
 | # | Change | Where | Effort | Risk | Unblocks |
 |---|---|---|---|---|---|
-| 1 | Generalise `share_tasks()` + two adapters | part 1 | S | low | any dataset |
+| 1 | Generalise `share_tasks()`, keep the SWE-smith adapter | part 1 | S | low | any dataset with a cheap per-task delta |
 | 2 | Dataset decision tree | part 1 README | S | none | any dataset |
+| 3 | Document per-task vs `env_image_key` comparison; **ship neither grouping for SWE-bench** | part 1 README | S | none | the method, taught |
 | 5 | Harness capability matrix | top README | S | none | any harness |
 | 7 | Where-the-call-originates rule | top README | S | none | any harness |
-| 6 | `--bake-harness` in image prepare | part 1 | M | low | fixed-harness customers |
-| 3 | `--group-by env` for SWE-bench + hybrid guidance | part 1 | M | medium | 500 → 40 runtimes |
 | 9 | "Bring your own model" sections | parts 3, 4 | S | none | any model |
-| 4 | Build the missing 219 arm64 images | part 1 | L | medium | full SWE-bench Verified |
-| 8 | Recording proxy, `mini-swe-agent` first | new part | L | high | harness-independent training |
+| 6 | `--bake-harness`, terminus-2 included | part 1 | M | low | 12 s/trial now, 51 s for installed harnesses |
+| 4 | Build the missing 219 arm64 images | part 1 | L | medium | full SWE-bench Verified (500) |
+| 8 | Recording proxy for `mini-swe-agent` (transport is config) | new part | M–L | medium | harness-independent training |
 
-Changes 1, 2, 5, 7, 9 are documentation and refactoring with no behavioural risk and they
-carry most of the generality benefit — worth doing first and together. 6 and 3 are real
-features with measurable payoff. 4 is mechanical but long (qemu). 8 is a research-shaped
-task and, if it works, an upstream RFC rather than a kit feature.
+**Batch A — 1, 2, 3, 5, 7, 9.** Documentation and one refactor. No behavioural risk, and
+they carry most of the generality benefit. Do them together.
+
+**Batch B — 6.** A real feature with a measured payoff on every trial, including the demo
+path.
+
+**Batch C — 4, then 8.** 4 is mechanical but long (qemu). 8 shrank once VPC mode turned
+out to exist on both sides: the only new component is the proxy plus the seam that gets
+`RolloutDetail` onto an installed harness's trial result. Prototype that seam before
+committing to it; if it works it is an upstream RFC, not a kit feature.
+
+### Decisions taken in review
+
+| Question | Decision |
+|---|---|
+| Group SWE-bench by `env_image_key`? | **No** — per-task images. Session cost is recurring, build cost is not. Document the comparison. |
+| Which harness for the demo? | **terminus-2**, the only one both evaluable and trainable. |
+| Bake the harness into images? | **Optional flag**, and it should cover terminus-2 too — its 12.0 s is not free. |
+| Sandbox → host transport | **VPC mode**, private addressing. No public exposure, no Harbor change. |
+| First harness for the proxy | **`mini-swe-agent`**, not `claude-code`. |
 
 ## Non-goals
 
