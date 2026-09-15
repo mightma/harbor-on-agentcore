@@ -1,0 +1,69 @@
+# Harbor job: evaluate Claude Code as the harness on the arm64 slice of SWE-bench
+# Verified, with every trial's sandbox an AgentCore Runtime session.
+#
+# Driven by scripts/run_eval_claude_code.sh, which substitutes the model id.
+#
+# THIS IS A DIFFERENT SCAFFOLD, NOT JUST A DIFFERENT MODEL. Do not compare the
+# number it produces against configs/eval-bedrock.yaml's number as if only the
+# model changed:
+#
+#   eval-bedrock.yaml   terminus-2, an *internal* agent. It runs in the local
+#                       harbor process, only shell commands cross into the
+#                       sandbox, and the Bedrock call goes out from the host. Turn
+#                       budget and context window are pinned by harbor (8 turns,
+#                       32k) so it matches part 4's training scaffold exactly.
+#
+#   this file           claude-code, an *installed* agent. Harbor installs the CLI
+#                       inside the sandbox; the CLI drives its own agent loop with
+#                       its own tools (Read/Edit/Bash/Task/...), manages its own
+#                       context, and calls Bedrock from inside the sandbox using
+#                       the runtime's execution role via IMDS.
+#
+# Two consequences worth stating before reading any result:
+#
+#   1. The execution role becomes the credential under test. Anything running in
+#      the sandbox can read it off IMDS -- so this path requires the role to allow
+#      bedrock:InvokeModel, which the terminus-2 path does not.
+#   2. Nothing here is trainable. claude-code calls the model with its own client,
+#      so harbor records no per-turn token ids or logprobs. See "Open limitation"
+#      in the top-level README.
+
+n_attempts: 1
+
+environment:
+  type: agentcore
+  force_build: false
+  delete: true
+  kwargs:
+    delete_runtime: false
+    share_by_content: true
+    prune_local_images: false
+    exec_timeout_sec: 3600
+
+agents:
+  - name: claude-code
+    # The prefix only carries the model id. The Bedrock switch is the environment
+    # variable CLAUDE_CODE_USE_BEDROCK, which claude-code reads on the host and
+    # then re-exports into the sandbox itself. Without it the CLI takes an empty
+    # ANTHROPIC_API_KEY to api.anthropic.com and fails auth while the model name
+    # looks perfectly correct.
+    model_name: bedrock/PLACEHOLDER
+    kwargs:
+      # Its own loop, so this is not comparable to terminus-2's 8. Left generous
+      # because capping a CLI agent mid-edit produces a broken tree rather than a
+      # smaller score.
+      max_turns: 40
+      # Per-trial cost ceiling (claude-code's --max-budget-usd). The real risk on
+      # this substrate is not the median task, it is the outlier: a measured
+      # terminal-bench run had one task spend 3,020 s and $10.09 while the median
+      # was $0.40. 70 trials x this value is the worst case.
+      max_budget_usd: "1.50"
+      # Default already, stated here because it is the reason the agent can edit
+      # files without an interactive approval it can never receive.
+      permission_mode: bypassPermissions
+
+verifier:
+  # Some psf__requests suites make network calls and hang; the task's own
+  # [verifier] timeout_sec is 3000, so one such trial would otherwise hold an
+  # AgentCore session for 50 minutes.
+  override_timeout_sec: 600
