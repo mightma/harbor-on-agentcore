@@ -44,11 +44,32 @@ config="$TMPDIR/eval_vllm_$JOB_NAME.yaml"
 sed "s|hosted_vllm/PLACEHOLDER|hosted_vllm/$SERVED_NAME|; s|127.0.0.1:8000|127.0.0.1:$PORT|" \
   "$PART/configs/eval-vllm.yaml" > "$config"
 
+# SMOKE=n runs only the first n instances of the list -- for proving a path works
+# before paying for all 70. Do NOT try to get that effect by pointing TASK_LIST
+# somewhere empty: an unreadable list used to mean "no filters", which silently ran
+# the whole set.
 include_flags=()
-if [ -f "$TASK_LIST" ]; then
+if [ -n "${SMOKE:-}" ]; then
+  [ -r "$TASK_LIST" ] || { echo "SMOKE needs a readable TASK_LIST: $TASK_LIST" >&2; exit 1; }
+  while read -r instance; do
+    [ -n "$instance" ] && include_flags+=(-i "*$instance")
+    [ "$((${#include_flags[@]} / 2))" -ge "$SMOKE" ] && break
+  done < "$TASK_LIST"
+  echo "SMOKE=$SMOKE: restricting to $((${#include_flags[@]} / 2)) instance(s)"
+elif [ -n "$TASK_LIST" ]; then
+  # A TASK_LIST that cannot be read is a mistake, not a request for everything.
+  if [ ! -r "$TASK_LIST" ] || [ ! -s "$TASK_LIST" ]; then
+    echo "TASK_LIST is set but not a readable non-empty file: $TASK_LIST" >&2
+    echo "to run the whole task set on purpose, pass TASK_LIST=''" >&2
+    exit 1
+  fi
   while read -r instance; do
     [ -n "$instance" ] && include_flags+=(-i "*$instance")
   done < "$TASK_LIST"
+fi
+
+if [ "${#include_flags[@]}" -eq 0 ]; then
+  echo "no instance filter: running every task under $TASKS" >&2
 fi
 
 echo "job=$JOB_NAME model=$MODEL served=$SERVED_NAME"
