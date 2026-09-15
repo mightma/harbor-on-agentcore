@@ -46,6 +46,48 @@ ARM_ARCH = "arm64"
 ADAPTER_SRC = os.environ.get("ADAPTER_SRC")
 
 
+# --- portable image references -------------------------------------------------
+#
+# prepared.json is a committed artifact, so it stores "<repository>:<tag>" with no
+# registry host -- otherwise it would bake in the ECR account id of whoever
+# produced it. The registry goes back on here.
+#
+# Fully qualified references are passed through unchanged, so a manifest produced
+# before this change still works.
+
+
+def is_registry_qualified(ref: str) -> bool:
+    head = ref.split("/", 1)[0]
+    return "/" in ref and ("." in head or ":" in head)
+
+
+def ecr_registry() -> str:
+    """The caller's ECR registry host, from $ECR_REGISTRY or the current identity."""
+    override = os.environ.get("ECR_REGISTRY")
+    if override:
+        return override.rstrip("/")
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if not region:
+        raise SystemExit(
+            "cannot qualify image references: set ECR_REGISTRY, or AWS_REGION so the "
+            "registry can be derived from the current identity (source config.env)"
+        )
+    out = subprocess.run(
+        ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        raise SystemExit(f"aws sts get-caller-identity failed: {out.stderr.strip()}")
+    return f"{out.stdout.strip()}.dkr.ecr.{region}.amazonaws.com"
+
+
+def qualify_image(ref: str, registry: str | None = None) -> str:
+    if is_registry_qualified(ref):
+        return ref
+    return f"{registry or ecr_registry()}/{ref}"
+
+
 def patch_registry_to_arm64() -> None:
     """Flip every profile to arm64 so `image_name` names the arm64 tag.
 
@@ -258,11 +300,16 @@ def main() -> None:
 
     if args.shared_images:
         prepared_records = json.loads(args.shared_images.read_text())
-        prepared = {
-            r["key"]: r["image"]
-            for r in prepared_records
-            if r.get("status") == "ok" and r.get("image")
-        }
+        ok_records = [
+            r for r in prepared_records if r.get("status") == "ok" and r.get("image")
+        ]
+        # Resolve the registry once, and only if something actually needs it.
+        registry = (
+            ecr_registry()
+            if any(not is_registry_qualified(r["image"]) for r in ok_records)
+            else None
+        )
+        prepared = {r["key"]: qualify_image(r["image"], registry) for r in ok_records}
         shared, skipped = share_tasks_by_repo(args.output_dir, prepared)
         print(
             f"{shared} tasks rewritten to share {len(set(prepared.values()))} "

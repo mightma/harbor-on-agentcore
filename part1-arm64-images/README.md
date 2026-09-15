@@ -168,6 +168,20 @@ The task dirs are **disposable** — that command rebuilds them. What is durable
 | `gate_passing_images.txt` | the 108 images whose oracle scores 1.0 (see part 2) |
 | `gate_passing_tasks.txt` | the 38,815 task names on those images |
 
+Image references in those files are stored **without a registry host** —
+`swesmith-arm64:<key>-prepared-arm64`, not
+`<account>.dkr.ecr.<region>.amazonaws.com/swesmith-arm64:...`. They are committed
+artifacts, and a fully qualified URI would pin them to the account that happened to
+build the images. The registry is reattached when tasks are generated, from
+`$ECR_REGISTRY` or from `aws sts get-caller-identity` plus `$AWS_REGION`. Already
+qualified references pass through untouched, so a manifest produced before this
+change still works.
+
+Consequence worth knowing: **the images have to exist in *your* registry.** These
+manifests describe what to build, not a public dataset you can pull. Run
+`scripts/build_swesmith.sh --push` first, or set `ECR_REGISTRY` to a registry you can
+actually read.
+
 Keep that directory on durable storage. The scratch disk holding the task dirs was
 wiped twice during this work; each time the cost was one 9-minute regeneration
 *because* the manifests were elsewhere.

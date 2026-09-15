@@ -44,6 +44,20 @@ SIGNATURES = [
 ]
 
 
+def unqualified_image(ref: str) -> str:
+    """Drop the registry host so the written allowlist is portable.
+
+    task.toml holds a fully qualified ECR URI, which carries the account id of
+    whoever built the images. gate_passing_images.txt is a committed artifact, so
+    it records "<repository>:<tag>" instead. Docker's own rule: a reference is
+    registry-scoped when its first path segment contains a dot or a colon.
+    """
+    head = ref.split("/", 1)[0]
+    if "/" in ref and ("." in head or ":" in head):
+        return ref.split("/", 1)[1]
+    return ref
+
+
 def classify(oracle_text: str | None) -> str:
     if oracle_text is None:
         return "no oracle.txt (trial failed earlier -- read trial.log)"
@@ -128,7 +142,9 @@ def main() -> int:
         names = sorted(n for n, image in image_of.items() if image in passing_images)
 
         args.allowlist_out.mkdir(parents=True, exist_ok=True)
-        (args.allowlist_out / "gate_passing_images.txt").write_text("\n".join(sorted(passing_images)) + "\n")
+        (args.allowlist_out / "gate_passing_images.txt").write_text(
+            "\n".join(sorted(unqualified_image(i) for i in passing_images)) + "\n"
+        )
         (args.allowlist_out / "gate_passing_tasks.txt").write_text("\n".join(names) + "\n")
         print(f"\nwrote {len(passing_images)} images / {len(names)} task names to {args.allowlist_out}")
 

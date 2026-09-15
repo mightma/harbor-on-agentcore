@@ -99,6 +99,27 @@ def built_images() -> dict[str, str]:
     return dict(sorted(found.items()))
 
 
+# --- portable image references -------------------------------------------------
+#
+# prepared.json is committed to the repository, so it must not contain the ECR
+# account id of whoever produced it. The manifest therefore stores
+# "<repository>:<tag>" and the registry host is reattached at use time.
+#
+# The test for "already qualified" is Docker's own: a reference is registry-scoped
+# when its first path segment contains a dot or a colon (a hostname or host:port).
+# Plain "swesmith-arm64:tag" has no slash at all, so it is unqualified.
+
+
+def is_registry_qualified(ref: str) -> bool:
+    head = ref.split("/", 1)[0]
+    return "/" in ref and ("." in head or ":" in head)
+
+
+def unqualified_image(ref: str) -> str:
+    """Drop the registry host from an image reference, if it has one."""
+    return ref.split("/", 1)[1] if is_registry_qualified(ref) else ref
+
+
 def ecr_registry(region: str) -> str:
     code, out = sh(
         ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"]
@@ -157,7 +178,11 @@ def prepare_one(key: str, base: str, target: str, timeout: int, push: bool) -> d
     return {
         "key": key,
         "status": "ok",
-        "image": target,
+        # Recorded WITHOUT the registry host, so the manifest is portable across
+        # accounts and regions -- it is a committed artifact and a fully qualified
+        # ECR URI would bake in the account id that produced it. Consumers put the
+        # registry back via unqualified_image()/qualify_image().
+        "image": unqualified_image(target),
         "sec": int(time.time() - started),
         "size_mb": int(int(size.strip() or 0) / 1e6),
         "branches": int(re.sub(r"\D", "", branches) or 0),
