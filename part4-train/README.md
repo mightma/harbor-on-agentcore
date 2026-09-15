@@ -102,6 +102,16 @@ Steps 1–3 are cheap precisely because the expensive failures in this stack all
 | `FLA_TILELANG=0` | `CUDA compiler and CUDA toolkit headers are incompatible` on the **first backward** | Qwen3.5's gated-delta-rule layers come from flash-linear-attention, which prefers a TileLang kernel and JITs it on first use. Its guard only checks that an `nvcc` binary exists, so the mismatch surfaces at codegen. Falls back to Triton. |
 | `NCCL_NET_PLUGIN=none` | NCCL segfaults in `commAlloc()` on the first collective | No EFA device here, so the DLAMI's aws-ofi-nccl plugin fails to initialise. |
 
+### The harness is not a free choice here
+
+`configs/harbor_trial_acr.yaml` sets `agent.name: terminus-2` and
+`collect_rollout_details: true`, and neither is swappable today: step-wise RL needs
+per-turn token ids and logprobs, which only a harness routing its model calls through
+Harbor's own LLM layer can supply. The SWE-specialised harnesses
+(`mini-swe-agent`, `swe-agent`, `claude-code`) are installed CLIs that call the model
+themselves, so nothing records those calls. See **Open limitation** in the top-level
+README for why this is a gap rather than a wall, and what would close it.
+
 Plus two Qwen3.5-specific flags, both taken from SkyRL's own
 `examples/train/models/run_qwen3.5_0.8b.sh` rather than guessed:
 

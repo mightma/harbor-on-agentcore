@@ -114,6 +114,59 @@ Anything else is a projection. In particular:
 This kit is a working pipeline with two known-good end-to-end runs behind it. It is
 not a benchmark report.
 
+## Open limitation: training is pinned to the `terminus-2` harness
+
+**Status: known, accepted for now. Parts 3 and 4 both use `terminus-2`.**
+
+Harbor lets you pick the harness (`agents[].name`, 47 available in this build), but
+only a harness whose model calls flow through Harbor's own LLM layer can produce the
+per-turn token ids and logprobs that step-wise RL needs. Today that is `terminus-2`
+and `computer-1`, and `computer-1` is a computer-use agent — so for SWE tasks the
+training harness is effectively fixed.
+
+The mechanism is small (`llms/lite_llm.py`): when `collect_rollout_details` is on it
+asks the engine for two extra things,
+
+```python
+completion_kwargs["logprobs"] = True
+extra_body["return_token_ids"] = True
+```
+
+and assembles the responses into `RolloutDetail` (`prompt_token_ids`,
+`completion_token_ids`, `logprobs` per turn). That is an *engine* capability, not an
+agent capability — vLLM's OpenAI endpoint returns both.
+
+The SWE-specialised harnesses are all `InstalledAgentOptions` — `mini-swe-agent`,
+`swe-agent`, `claude-code` — meaning Harbor installs the CLI into the sandbox and the
+CLI calls the model with its own client. Nothing records those calls.
+
+**This is a gap, not a wall.** Harbor already decides where those CLIs send their
+traffic: it injects the endpoint as an env var per harness
+(`mini_swe_agent.py` declares `base_url_envs=("OPENAI_BASE_URL", "OPENAI_API_BASE")`,
+`claude_code.py` declares `ANTHROPIC_BASE_URL`). The missing piece is a **recording
+proxy** at that address: forward to vLLM, add the two parameters above, accumulate
+`RolloutDetail`. No agent changes, and no SkyRL changes — it already consumes
+`RolloutDetail`. Capturing at the API boundary is also more trustworthy than capturing
+inside the agent, because what you record is what the engine actually emitted.
+
+Two classes of harness stay hard even with a proxy, and `RolloutDetail`'s own docstring
+says as much ("agents with subagents, summarization, or other non-linear chat
+histories"):
+
+- **subagents** (`claude-code` spawns Task) — the trajectory is not one line, and which
+  tokens belong to which trajectory's advantage is a semantic question a proxy cannot
+  answer;
+- **client-side context rewriting** — if the harness compacts its own history, turn *N*'s
+  prompt is not the concatenation of turns 1..*N*−1. This is also why parts 3 and 4 set
+  `enable_summarize: false`; SkyRL's step-wise path rejects summarisation outright.
+
+`mini-swe-agent` is deliberately minimal (single linear conversation, no subagents), so
+it is the most likely third-party harness to become trainable through a proxy.
+
+Until then: **train with `terminus-2`.** Evaluating with a different harness is fine and
+cheap, but be explicit that the training and evaluation scaffolds then differ — which is
+exactly the comparison this kit otherwise works to keep clean.
+
 ## Runtime budget
 
 One runtime per distinct task image, and they are kept deployed
