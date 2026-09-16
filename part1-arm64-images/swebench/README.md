@@ -23,17 +23,19 @@ sharing wins.
 
 ## Coverage
 
-**\[measured\]** 281 of 500 instances have a published arm64 image; the other 219 do not,
-and **2 of those can never be built on arm64** — `django__django-10097` and
-`django__django-7530` pin conda `python=3.5`, which has no linux-aarch64 package. So the
-ceiling is 217 of 219.
+**\[measured\]** 281 of 500 instances have a published arm64 image. Of the other 219,
+**160 have now been built** and are in ECR, putting SWE-bench Verified at **441/500 (88%)**
+on arm64. The 59 that do not build all have identified causes — 51 of them hard arm64
+package-availability walls (scipy, `cdms2`, an ancient `setuptools`, conda `python=3.5`),
+the rest dependency or upstream drift. The part 1 README has the table.
 
 | `data/` file | Instances |
 |---|---|
 | `swebv-arm64-instances.txt` | 281 published |
 | `swebv-arm64-train.txt` / `swebv-arm64-eval.txt` | 208 / 73, split by repository |
 | `swebv-arm64-eval-verified.txt` | 70 — eval minus 3 whose oracle ceiling is 0 |
-| `swebv-arm64-selfbuilt-gated.txt` | 16 built here and gate-clean |
+| `swebv-arm64-selfbuilt.txt` | **160 built here**, read back from ECR |
+| `swebv-arm64-selfbuilt-gated.txt` | 16 of those gate-clean so far |
 
 ## Usage
 

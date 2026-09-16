@@ -277,7 +277,19 @@ DOCKER_HOST=ssh://ubuntu@<graviton> uv run swebench/build_images.py \
 
 Two honest caveats: that 15–19× is the *emulation* factor on this machine, not Graviton
 hardware performance, and the part of a build that is pip downloads will not speed up at
-all.
+all. The end-to-end numbers below say what it was actually worth: **16× per instance**.
+
+**What to launch**, from doing it:
+
+| | Choice | Why |
+|---|---|---|
+| Instance | **c7gd.8xlarge** (32 vCPU / 64 GB / 950 GB NVMe) | the cost is `git gc --aggressive` — CPU and memory-bandwidth bound, multithreaded |
+| AMI | Ubuntu 24.04 arm64, or AL2023 arm64 | **not** a DLAMI: no GPU is needed and its docker-29-plus-containerd-store config is what broke the other host |
+| Pricing | **Spot** | the builder is idempotent and pushes per image, so an interruption costs only the in-flight ones |
+| Disk | docker on the instance-store NVMe | with docker's containerd image store, moving `data-root` is **not enough** — the content store is `/var/lib/containerd`, so plan for both, or keep a large root volume |
+| Concurrency | **≈ vCPU / 4** | `git gc` opens threads per core; 8 vCPU at concurrency 4 hit load 32 and stretched a 2-minute build to 35 |
+| IAM | ECR only | a build box needs no AgentCore and no S3 |
+| Emulation | **none** | SWE-bench's chain is arm64 all the way down. (SWE-smith's builder is the exception: it runs the published *amd64* image to export a conda env, so that path needs `binfmt --install amd64`.) |
 
 **Some instances cannot be built on arm64, full stop.** **\[measured\]** two of the 219 —
 `django__django-10097` and `django__django-7530` — pin conda `python=3.5`, and linux-aarch64
@@ -286,10 +298,59 @@ has no python 3.5 package in `defaults` or `conda-forge`, so `conda create` ends
 other python version the unpublished set needs (3.6 through 3.11) does have aarch64
 packages, so this is the only hard exclusion.
 
-**\[measured\]** a 24-instance batch (requests 1, seaborn 1, pylint 3, pytest 9, sphinx
-10 — the four cheapest repos of the 219) on the same host: **10 env images, 23 instance
-images, 23/23 built, ~1 h 50 min wall clock** at concurrency 3. Instance stage per repo:
-pylint ~140 s, pytest ~215 s, seaborn 273 s, sphinx 470–740 s.
+**\[measured\]** then the whole set, on a **c7gd.8xlarge** (32 vCPU, native arm64, no
+emulation) at concurrency 8 — the same builder, the same day:
+
+| | x86 + qemu (8 vCPU, conc. 4) | **Graviton c7gd.8xlarge (32 vCPU, conc. 8)** |
+|---|---|---|
+| django instance, mean | 2112 s (35 min) | **131 s** — 16× faster |
+| throughput | ~6.9 images/h | **~220 images/h** — 32× |
+| django's 6 env images | hours | **~4 min** |
+| all 80 django instances | ~12 h projected | **26 min** |
+
+The whole remaining set — 185 instances across six repos — took **~1 h 40 min** of wall
+clock instead of the day-plus this would have been under emulation. Result:
+
+| | |
+|---|---|
+| Self-built images now in ECR | **160** |
+| SWE-bench Verified runnable on arm64 | **441 / 500 (88%)** = 281 published + 160 built |
+| Of the 219 unpublished | 160 built, **59 not** — every one for a reason below |
+
+`swebench/data/swebv-arm64-selfbuilt.txt` is the list of 160, read back from ECR.
+
+#### The 59 that do not build, and why
+
+Not one of them is a defect in the builder, and only two are really *about* arm64:
+
+| Count | Repo | Cause | Class |
+|---|---|---|---|
+| 25 | scikit-learn | pinned old scipy has no aarch64 wheel and fails to compile from source | **arm64 hard** |
+| 22 | xarray | `cdms2` has no linux-aarch64 build in conda-forge | **arm64 hard** |
+| 4 | astropy | `setuptools==38.2.4` (2017) has no aarch64 build in `defaults` | **arm64 hard** |
+| 2 | django | conda `python=3.5` does not exist for linux-aarch64 | **arm64 hard** |
+| 3 | matplotlib | python 3.8 env, pip subprocess failure during dependency install | not diagnosed |
+| 2 | astropy | `pip install -e .` fails at "getting requirements to build editable" | **drift**, pin-fixable |
+| 1 | sympy | `setup_repo.sh` clones branch `1.7`, which sympy has since **deleted** upstream | **drift**, unfixable here |
+
+The drift classes are worth internalising, because they are what a *fresh build of an old
+benchmark* costs and they are not architecture-specific — they would hit an amd64 rebuild
+today just as hard:
+
+- **runtime dependency drift.** sphinx: docutils 0.23 against Sphinx 3.1.0. Fixed with
+  `--pin 'sphinx-doc/sphinx=docutils<0.17'`, **\[measured\]** 0 → 14 tests passing, gate
+  0.000 → 1.000.
+- **tooling drift.** scikit-learn's install command passes `--no-use-pep517`, which modern
+  pip has **removed** (`no such option`). Fixed with
+  `--pin 'scikit-learn/scikit-learn=pip==22.3.1'` — **\[measured\]** 3 of 3 instances then
+  built and pushed. This is what `--pin` is for: it constrains the env image, so anything
+  pip-installable including pip itself can be held back.
+- **upstream drift.** A deleted branch cannot be pinned around; that instance is simply
+  gone unless the clone strategy changes.
+
+Earlier, smaller batch for the record: 24 instances (requests, seaborn, pylint ×3, pytest
+×9, sphinx ×10) on the x86 host, 10 env images, 23/23 built, ~1 h 50 min at concurrency 3
+— pylint ~140 s, pytest ~215 s, seaborn 273 s, sphinx 470–740 s each.
 
 Then the gate, which is the number that matters:
 
