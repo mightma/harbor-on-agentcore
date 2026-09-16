@@ -36,6 +36,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from task_sharing import ShareResult, TaskDir, report, share_tasks
+
 ARM_PLTF = "linux/arm64/v8"
 ARM_ARCH = "arm64"
 
@@ -126,82 +128,50 @@ def local_arm64_images() -> set[str]:
     return {line.strip() for line in out.stdout.splitlines() if "swesmith.arm64." in line}
 
 
+def share_swesmith_tasks(output_dir: Path, prepared: dict[str, str]) -> ShareResult:
+    """The SWE-smith adapter over ``share_tasks()``: one image per repository.
 
+    Three lines of policy over a general mechanism (see task_sharing.py):
 
-def share_tasks_by_repo(output_dir: Path, prepared: dict[str, str]) -> tuple[int, int]:
-    """Rewrite generated tasks so one image serves every task of a repository.
+        group  = the repository, read back off the task's own FROM tag
+        image  = that repository's prepared image, from prepared.json
+        setup  = ``git checkout <instance_id>``
 
-    The adapter writes the per-task checkout into the task's own Dockerfile::
+    Why it is needed here: the adapter writes the per-task checkout into the
+    task's own Dockerfile::
 
         FROM <repo image>
         RUN apt-get install -y git ... && mkdir -p /logs
         RUN git fetch && git checkout <instance_id>
 
-    Harbor's environment identity is ``environment_content_hash(environment_dir,
-    docker_image=...)``, so that ``<instance_id>`` gives each of the ~52k tasks a
-    distinct hash: each pushes its own image and, on AgentCore Runtime, deploys
-    its own runtime. Against a 1,000-runtime account quota that does not run.
+    That ``<instance_id>`` gives each of the ~44k tasks a distinct environment
+    content hash, so each would push its own image and deploy its own AgentCore
+    runtime. Against a 1,000-runtime account quota that does not run.
 
-    Two changes make them converge, and neither touches Harbor or the adapter:
-
-    1. Delete ``environment/Dockerfile``. With the directory empty, the hash falls
-       back to ``sha256(docker_image)`` -- identical for every task of a
-       repository, still distinct across repositories. Everything the deleted
-       Dockerfile installed now lives in the prepared image
-       (scripts/prepare_swesmith_images.py), including the fetched branches.
-
-    2. Carry the per-task checkout in ``task.toml``, which is *not* part of the
-       content hash. ``[environment.healthcheck]`` is the hook that runs at the
-       right moment: Trial._prepare() calls environment start, then
-       ``run_healthcheck()``, then installs and runs the agent. The loop returns
-       as soon as the command exits 0, so a successful checkout runs exactly once,
-       and a failed one aborts the trial instead of handing the agent a repository
-       sitting on the wrong commit.
-
-    Pair with ``--ek share_by_content=true`` on the agentcore environment, which
-    drops the task name from the image tag and the runtime name; without it the
-    identical hashes still produce one image and one runtime per task.
+    Why it is *cheap* here, which is the part that does not generalise: every task
+    of a SWE-smith repository is a branch off the same commit, and
+    prepare_swesmith_images.py already baked git, /logs and every task branch into
+    the image. So the per-task delta is a local checkout with no network -- ~0 s,
+    once, per session. A dataset whose delta is an install instead should think
+    twice; README.md works that comparison through.
     """
-    import toml
 
-    shared = skipped = 0
-    for task_dir in sorted(p for p in output_dir.iterdir() if p.is_dir()):
-        toml_path = task_dir / "task.toml"
-        if not toml_path.exists():
-            continue
-        doc = toml.loads(toml_path.read_text())
-        instance_id = str(doc.get("metadata", {}).get("instance_id") or task_dir.name)
+    def group_of(task: TaskDir) -> str | None:
+        # The prepared images are keyed by profile key, and the un-prepared image
+        # the adapter chose encodes it: swesmith.arm64.<profile key>.
+        if not task.base_image:
+            return None
+        stem = task.base_image.split("/")[-1].split(":")[0]
+        prefix = f"swesmith.{ARM_ARCH}."
+        return stem[len(prefix) :] if stem.startswith(prefix) else None
 
-        dockerfile = task_dir / "environment" / "Dockerfile"
-        image = None
-        if dockerfile.exists():
-            for line in dockerfile.read_text().splitlines():
-                if line.strip().upper().startswith("FROM "):
-                    image = line.split(None, 1)[1].strip()
-                    break
-        key = None
-        if image:
-            stem = image.split("/")[-1].split(":")[0]
-            if stem.startswith("swesmith.arm64."):
-                key = stem[len("swesmith.arm64.") :]
-        if key is None or key not in prepared:
-            skipped += 1
-            continue
+    return share_tasks(
+        output_dir,
+        group_of=group_of,
+        image_of=prepared.get,
+        setup_cmd=lambda task: f"cd /testbed && git checkout {task.instance_id}",
+    )
 
-        dockerfile.unlink()
-        env = doc.setdefault("environment", {})
-        env["docker_image"] = prepared[key]
-        hc: dict[str, object] = {}
-        # A local checkout: the prepared image already fetched every branch.
-        hc["command"] = f"cd /testbed && git checkout {instance_id}"
-        hc["timeout_sec"] = 120.0
-        hc["retries"] = 2
-        hc["interval_sec"] = 2.0
-        env["healthcheck"] = hc
-        toml_path.write_text(toml.dumps(doc))
-        shared += 1
-
-    return shared, skipped
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -221,7 +191,8 @@ def main() -> None:
         default=None,
         help="prepared.json from scripts/prepare_swesmith_images.py. Rewrites the generated "
         "tasks to share one image (and therefore one AgentCore runtime) per "
-        "repository instead of one per task. See share_tasks_by_repo().",
+        "repository instead of one per task. See share_swesmith_tasks(), and "
+        "task_sharing.py for the same mechanism against another dataset.",
     )
     parser.add_argument(
         "--require-local-images",
@@ -310,16 +281,7 @@ def main() -> None:
             else None
         )
         prepared = {r["key"]: qualify_image(r["image"], registry) for r in ok_records}
-        shared, skipped = share_tasks_by_repo(args.output_dir, prepared)
-        print(
-            f"{shared} tasks rewritten to share {len(set(prepared.values()))} "
-            f"repo image(s); {skipped} left per-task"
-        )
-        if skipped:
-            print(
-                "  (skipped tasks have no prepared image for their repo; they will "
-                "still build their own image and runtime)"
-            )
+        report(share_swesmith_tasks(args.output_dir, prepared))
 
 
 if __name__ == "__main__":
