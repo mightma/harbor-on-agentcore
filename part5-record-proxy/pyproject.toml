@@ -1,0 +1,18 @@
+[project]
+name = "part5-record-proxy"
+version = "0.1.0"
+description = "Record token ids and logprobs for a harness that calls the model itself"
+requires-python = ">=3.12"
+# Deliberately empty. The proxy is stdlib only (http.server + urllib), so it can
+# run next to vLLM inside part 3's or SkyRL's environment without adding a package
+# to either -- and so a version skew in the trainer's env can never break the
+# recording path. The scripts are runnable with any python3.12+ on the box:
+#
+#   python3 scripts/record_proxy.py --help
+#   python3 scripts/selftest.py
+#
+# `uv sync` still gives you an isolated venv if you want one.
+dependencies = []
+
+[tool.uv]
+package = false

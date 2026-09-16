@@ -1,0 +1,69 @@
+# Harbor job: mini-swe-agent as the harness, its model calls routed through the
+# recording proxy so the turns can be trained on.
+#
+# THE POINT OF THIS FILE. Every other config in this kit uses terminus-2, because
+# it is the only harness whose calls flow through Harbor's own LLM layer and are
+# therefore recorded. mini-swe-agent is an *installed* harness: Harbor installs the
+# CLI in the sandbox and the CLI calls the model itself. Pointing it at the proxy
+# is what makes those calls recordable -- see part5's README and
+# DESIGN-generalization.md change 8.
+#
+# THREE THINGS OUTSIDE THIS FILE HAVE TO BE TRUE, and none of them is a config key:
+#
+#   1. OPENAI_BASE_URL (or OPENAI_API_BASE) points at the proxy, on an address the
+#      *sandbox* can reach -- the host's private VPC address, not 127.0.0.1.
+#      mini_swe_agent.py declares those two as its base_url_envs, and Harbor
+#      injects whichever is set into the sandbox.
+#   2. MSWEA_API_KEY is set to something non-empty. mini-swe-agent's runner raises
+#      "No API key found for model ..." when it resolves to None, even for a local
+#      vLLM that ignores the key entirely.
+#   3. The runtime is on the same VPC as the host (network_mode below), or the
+#      sandbox has no route to the proxy at all.
+#
+# AND THE POSTURE CHANGES. Today's terminus-2 configs give the sandbox no
+# credentials and no inbound path. This gives the code under test a route to a
+# service on your training host. Scope the security group to the proxy port only,
+# and remember the sandbox still holds the execution role.
+
+n_attempts: 1
+
+environment:
+  type: agentcore
+  force_build: false
+  delete: true
+  kwargs:
+    delete_runtime: false
+    share_by_content: true
+    prune_local_images: false
+    exec_timeout_sec: 3600
+
+    # The transport. This needs no Harbor change: the provider already takes these
+    # (environments/agentcore/environment.py -- network_mode defaults to PUBLIC),
+    # and CreateAgentRuntime's networkConfiguration accepts VPC.
+    network_mode: VPC
+    subnets: subnet-CHANGEME          # a subnet in the host's VPC
+    security_groups: sg-CHANGEME      # must allow inbound to the proxy port
+    # If the sandbox loses its default route to AWS services in VPC mode, ECR
+    # pulls start failing in a way that looks like a build error. Add the VPC
+    # endpoints, or set requireServiceS3Endpoint on the runtime.
+
+agents:
+  - name: mini-swe-agent
+    # The prefix selects the provider for this harness (unlike claude-code, which
+    # pins its own): hosted_vllm/ plus OPENAI_BASE_URL is a local server, and the
+    # served name must match `vllm serve --served-model-name`.
+    model_name: hosted_vllm/PLACEHOLDER
+    kwargs:
+      # Harbor sends this as the X-Session-ID header
+      # (model.model_kwargs.extra_headers), which is what the proxy groups turns
+      # by. SkyRL sets it per rollout; set it here only for a single-trial test,
+      # since one value across a whole job would merge every trial into one
+      # "rollout".
+      # session_id: set-me-per-trial
+      #
+      # Streaming has to stay off: the proxy refuses stream=true rather than
+      # relay a turn it cannot record.
+      session_id_headers: ["X-Session-ID"]
+
+verifier:
+  override_timeout_sec: 600
