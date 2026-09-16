@@ -83,6 +83,69 @@ Without it an untouched "Reply with exactly: ok" spends its entire output budget
 wrapper deep-merges `extra_body`, so this coexists with the `return_token_ids` it adds
 for rollout details.
 
+## Bring your own model
+
+Two places to change, and neither is in a config file: `EVAL_BEDROCK_MODEL` /
+`POLICY_MODEL` in `config.env`, or the first argument to the run scripts. The scripts
+substitute the placeholder in the YAML, so the configs stay model-agnostic.
+
+**The provider prefix rule.** For an *internal* harness (`terminus-2`) `model_name` goes
+straight to LiteLLM, and the prefix — not a separate setting — selects the provider.
+Harbor resolves credentials from the same prefix (`harbor/agents/model_connection.py`,
+where `_PROVIDER_ALIASES` maps `bedrock` → its `amazon-bedrock` credential set):
+
+| What you have | `model_name` | Also needs |
+|---|---|---|
+| Bedrock model or cross-region inference profile | `bedrock/us.anthropic.claude-sonnet-5` | **this host's** credentials to allow `bedrock:InvokeModel` — not the sandbox's |
+| vLLM, SGLang, anything OpenAI-compatible | `hosted_vllm/<served-model-name>` | `api_base`, and the served name must match what the server advertises |
+| Anthropic API directly | `anthropic/claude-…` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai/…` | `OPENAI_API_KEY` |
+
+`run_eval_vllm.sh` derives the served name from the path (`SERVED_NAME`, default
+`basename`) and passes it to both `vllm serve --served-model-name` and the
+`hosted_vllm/` prefix. Overriding one and not the other is the standard way to get a
+404 from a server that is running perfectly.
+
+**The prefix is not a switch for an installed harness.** `claude-code` pins its provider
+(`MODEL_CONNECTION.default_provider = "anthropic"`), so `bedrock/us.anthropic.claude-sonnet-5`
+contributes *only the model id* — the routing comes from the environment variable
+`CLAUDE_CODE_USE_BEDROCK=1` (or `AWS_BEARER_TOKEN_BEDROCK`), which is what blanks the
+inferred Anthropic endpoint and makes Harbor export AWS credentials and region into the
+sandbox. `run_eval_claude_code.sh` sets it. Without it the CLI takes an empty
+`ANTHROPIC_API_KEY` to `api.anthropic.com` and fails auth while the model name looks
+perfectly correct. Two follow-ons:
+
+- Harbor defaults the sandbox's `AWS_REGION` to **us-east-1** when the host has none
+  set. A `us.` inference profile is region-scoped, so the wrong region surfaces as a
+  model-not-found rather than as a region problem.
+- Not every installed harness behaves this way. `mini-swe-agent` declares no default
+  provider and is `passthrough`, so its prefix *does* select the provider and Harbor
+  injects `OPENAI_BASE_URL` / `OPENAI_API_BASE` into the sandbox for it. That injection
+  point is why it, not `claude-code`, is the first target in
+  `DESIGN-generalization.md`'s recording-proxy plan.
+
+**Check the id is live before paying for a run.** Model ids are per-region and per
+account:
+
+```bash
+aws bedrock list-inference-profiles --region "$AWS_REGION" \
+  --query 'inferenceProfileSummaries[?status==`ACTIVE`].inferenceProfileId' --output table
+aws bedrock list-foundation-models --region "$AWS_REGION" \
+  --query 'modelSummaries[].modelId' --output text | tr '\t' '\n' | grep anthropic
+```
+
+Then `SMOKE=1 scripts/run_eval_bedrock.sh <id>` — one task, one trial, and an auth or
+id mistake shows up in about a minute instead of after 70.
+
+**What has to move with the model:**
+
+| If you change | Also change |
+|---|---|
+| the model's context window | `model_info.max_input_tokens` **and** `MAX_MODEL_LEN` (vLLM path); the 8-turn budget assumes 32k |
+| to a non-Qwen policy | drop `extra_body.chat_template_kwargs.enable_thinking` unless that model's chat template takes it — it is not a harmless no-op |
+| to a paid API on the vLLM path | the `input_cost_per_token: 0.0` / `output_cost_per_token: 0.0` in `eval-vllm.yaml`, or `cost_usd` in the results is a lie |
+| the model, for a comparison | nothing else — that is the point of `configs/eval-*.yaml` holding the scaffold |
+
 ## Results
 
 **\[measured\]** Qwen3.5-**4B**, 70 tasks, 24 concurrent, 8 turns, 32k:

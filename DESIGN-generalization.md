@@ -1,6 +1,9 @@
 # Design: make this kit a method, not an example
 
-**Status: proposal, for review. Nothing here is implemented.**
+**Status: reviewed, decided, and implemented. All nine changes are marked \[shipped\]
+below. Change 4's build path has now been exercised for real — one instance built from
+scratch and gated 1.000 on AgentCore; change 6 ships as a capability that has
+deliberately not been run. See "What this host could and could not run".**
 
 Today the kit reads as *"here is how we ran SWE-smith and SWE-bench Verified with
 terminus-2 against Qwen3.5 and Sonnet 5."* It should read as *"here is the method; here
@@ -11,7 +14,7 @@ and a specific part they have to supply, and the kit currently conflates the two
 
 | Axis | The general question | Where the kit hardcodes our answer |
 |---|---|---|
-| Dataset | How many *distinct environments* does it have? | `share_tasks_by_repo()` is SWE-smith-shaped |
+| Dataset | How many *distinct environments* does it have? | ~~`share_tasks_by_repo()` is SWE-smith-shaped~~ → `share_tasks()` |
 | Harness | Does it call the model itself, or through Harbor? | terminus-2 assumed throughout part 4 |
 | Model | Does the call originate on the host or in the sandbox? | two configs, no stated rule |
 
@@ -66,8 +69,8 @@ retries must pass" — that is wrong; worth an upstream doc fix.)
 What *is* dataset-specific is only: the grouping function, the image name per group, and
 the setup command per task.
 
-**Change 1 — generalise the sharing helper.** Replace `share_tasks_by_repo(output_dir,
-prepared)` with
+**Change 1 \[shipped\] — generalise the sharing helper.** Replaced
+`share_tasks_by_repo(output_dir, prepared)` with
 
 ```python
 share_tasks(
@@ -79,9 +82,16 @@ share_tasks(
 )
 ```
 
-Ship two adapters over it — `swesmith.py` (group = repo, setup = `git checkout`) and
-`swebench.py` (group = `env_image_key`, setup = clone/reset/scrub/install) — and document
-the signature as the extension point. Effort: small; the body already exists.
+and document the signature as the extension point. Effort: small; the body already
+exists.
+
+**As shipped**, the helper lives in `part1-arm64-images/scripts/task_sharing.py` and
+carries only **one** adapter — `share_swesmith_tasks()` in `swesmith_tasks.py`, group =
+repo, setup = `git checkout`. The `swebench.py` adapter this change originally proposed
+is *not* shipped, because Change 3's review decided against grouping SWE-bench Verified
+at all; its grouping is documented in `part1/README.md` instead. The shipped helper also
+gained one thing the original did not have: it reports tasks whose `environment/` is
+still non-empty after the Dockerfile is removed, since those silently do not collapse.
 
 ### Two traps a customer will hit, and must be told about
 
@@ -102,7 +112,7 @@ directions:
 | microVM disk | 8.8 GB | fewer things baked in |
 | Runtimes per account | 1,000 | coarser grouping |
 
-**Change 2 — `part1/README.md` gets a decision tree**, replacing the current
+**Change 2 [shipped] — `part1/README.md` gets a decision tree**, replacing the current
 two-dataset narrative:
 
 ```
@@ -136,7 +146,7 @@ multiplies it by epochs. Paying minutes per trial to save a one-time build is a 
 exchange, and it also erodes the property this whole substrate is chosen for — the
 measured 3 s warm start.
 
-**Change 3 (revised) — do not implement grouping for SWE-bench.** Instead, document the
+**Change 3 (revised) [shipped] — do not implement grouping for SWE-bench.** Instead, document the
 comparison above in `part1/README.md` as the worked example of the sharing-granularity
 method, and state the rule it illustrates:
 
@@ -170,7 +180,7 @@ of coverage probing rather than a fixed 281-line fact.
 | `terminus-2`, `computer-1` | host, via Harbor's LLM layer | yes | **yes** |
 | `claude-code`, `mini-swe-agent`, `swe-agent`, … (`InstalledAgentOptions`) | inside the sandbox, own client | yes | **no, today** |
 
-**Change 5 — publish this table in the top-level README**, with the rule stated plainly:
+**Change 5 [shipped] — publish this table in the top-level README**, with the rule stated plainly:
 *any harness can be evaluated; only a harness whose calls flow through Harbor's LLM layer
 can be trained today.* The existing "Open limitation" section explains the why; what is
 missing is the general statement and how to test your own harness against it.
@@ -191,10 +201,36 @@ missing is the general statement and how to test your own harness against it.
 free either — 12.0 s × 70 ≈ 14 minutes**, which is worth reclaiming even though it is the
 demo harness.
 
-**It works, because Harbor's install is idempotent.**
-`claude_code.py:410` `_installed_claude_satisfies_version()` short-circuits with
-*"Claude Code is already available at the requested version"*. Bake the CLI into the
-prepared image and Harbor skips the install.
+> **Correction (raised in review, verified in the 0.23.0 source).** An earlier draft of
+> this section called terminus-2's 12.0 s an "agent install" and said baking would make
+> its setup "upload-only". That was wrong twice over, and the distinction matters:
+>
+> - **terminus-2 installs no agent into the sandbox.** It is host-internal: it runs in
+>   the harbor process, and the only thing crossing into the sandbox is shell commands.
+>   There is no CLI to bake.
+> - **The 12.0 s is nevertheless real, and it is a package install** —
+>   `Terminus2.setup()` constructs a `TmuxSession` and `TmuxSession.start()` calls
+>   `_attempt_tmux_installation()`, which checks for `tmux` and (because
+>   `record_terminal_session` defaults to **True**) `asciinema`, and on a miss runs
+>   `DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y tmux asciinema`
+>   in the sandbox as root, with a source build of tmux as fallback.
+>
+> So what `--bake-harness terminus-2` reclaims is **tmux + asciinema**, not an agent
+> install — and only the *install* part of the 12.0 s, not the tmux session start, the
+> pane setup or the script upload that follow it. Treat "up to 12.0 s" as the ceiling and
+> measure the remainder rather than assuming it goes to zero. `record_terminal_session:
+> false` is the other way to cut the asciinema half, at the cost of the recordings.
+>
+> **\[measured\]**, the 70-task Sonnet 5 pass: `agent_setup` median **12.0 s**, min 9.0 s,
+> max 53.6 s over 70/70 trials — so the floor is ~9 s even on a warm image, which is
+> consistent with an apt install rather than a file upload.
+
+**Baking works because Harbor's setup is idempotent — for both classes.** For installed
+CLIs it is a version check: `claude_code.py:410`
+`_installed_claude_satisfies_version()` short-circuits with *"Claude Code is already
+available at the requested version"*. For terminus-2 it is a presence check: with both
+tools already on the image, `_install_recording_tools()` logs *"Both tmux and asciinema
+are already installed"* and returns without exec'ing a package manager.
 
 **\[decided\]** terminus-2 remains the harness for the demo paths (parts 3 and 4), since
 it is the only one that is both evaluable and trainable. Baking is an **option**, not the
@@ -206,20 +242,30 @@ git, uv, `/logs` and every task branch; this appends a harness layer to the same
 Dockerfile. Ship a recipe per harness and document the shape so a customer can add
 theirs:
 
-| Harness | What the layer installs | Reclaimed per trial (**\[measured\]** median) |
-|---|---|---|
-| `terminus-2` | its runtime deps, so agent setup is upload-only | **12.0 s** |
-| `claude-code` | `npm install -g @anthropic-ai/claude-code` (+ node) | **51.3 s** |
-| `mini-swe-agent` | its pip package | not yet measured |
+| Harness | What the layer installs | What Harbor then skips | Reclaimed per trial |
+|---|---|---|---|
+| `terminus-2` | `tmux` + `asciinema` (apt) | `TmuxSession._install_recording_tools()` | **up to 12.0 s** (**\[measured\]** `agent_setup` median; the session start remains) |
+| `claude-code` | node + `npm install -g @anthropic-ai/claude-code@<version>` | `_installed_claude_satisfies_version()` | **51.3 s** (**\[measured\]** median) |
+| `mini-swe-agent` | `uv tool install mini-swe-agent` + curl/bash/git/build tools | its `install()`, via `get_version_command()` | not yet measured |
 
-Three caveats to document with it:
+Four caveats to document with it:
 
 - the baked version must satisfy the config's `version` or Harbor reinstalls anyway,
-  silently undoing the saving;
+  silently undoing the saving. For `mini-swe-agent` the check is
+  `uv tool list | grep mini-swe-agent`, so the bake has to install it *as a uv tool
+  under the agent user*, not as a plain `pip install`;
+- terminus-2's saving is bounded by what `_install_recording_tools()` would have done, so
+  it is smaller than the full 12.0 s and shrinks to nothing if the base image already
+  carries tmux;
 - each baked harness costs image size against the 2048 MB compressed ceiling, so baking
   several into one image is not free;
 - a baked image is harness-specific, which cuts against sharing one image set across
-  experiments — worth a separate tag rather than replacing the base one.
+  experiments — so it gets its own tag suffix rather than replacing the base one.
+
+**\[shipped, not run\]** `prepare_swesmith_images.py --bake-harness <name>` exists with
+the three recipes above and writes `<key>-prepared-<harness>-arm64`. No image has been
+built with it: this host cannot build (see the note at the end of this document), so the
+recipes are validated by rendering the Dockerfile, not by running it.
 
 ---
 
@@ -238,7 +284,7 @@ Where the model call originates decides the security posture, and it is a proper
 | Sandbox needs a path to your vLLM | no | **yes** |
 | What is exposed to the code under test | nothing | the execution role |
 
-**Change 7 — state this as a rule in the top-level README**, next to the harness matrix.
+**Change 7 [shipped] — state this as a rule in the top-level README**, next to the harness matrix.
 It is the single most consequential thing a customer gets wrong, and both existing eval
 configs merely *demonstrate* it in comments.
 
@@ -320,16 +366,39 @@ host beside vLLM, and connect the two with VPC mode. Scope:
 
 | Piece | Status |
 |---|---|
-| Sandbox → host transport | **exists** (`network_mode: VPC`, no code) |
+| Sandbox → host transport | **exists** (`network_mode: VPC`, no code) — verified as a real provider kwarg, `network_mode` defaulting to `PUBLIC` |
 | Pointing the harness at an endpoint | **exists** (`base_url_envs` injection, no code) |
-| Recording proxy: forward, add `logprobs`/`return_token_ids`, accumulate `RolloutDetail` | **to build** |
-| Attaching `RolloutDetail` to the trial result so SkyRL sees it | **to build** — the seam to design |
+| Recording proxy: forward, add `logprobs`/`return_token_ids`, accumulate `RolloutDetail` | **\[shipped\]** `part5-record-proxy/scripts/record_proxy.py` |
+| Attaching `RolloutDetail` to the trial result so SkyRL sees it | **\[shipped, prototype\]** `scripts/attach_rollouts.py` — post-hoc, not in-trial |
 
-That last row is the real unknown: Harbor populates `agent_result.rollout_details` from its
-own LLM layer, so a proxy-sourced version has to reach the same field for an installed
-harness. It is the part worth prototyping before promising anything.
+**\[shipped\] Change 8 landed as `part5-record-proxy/`.** What the prototype settled:
 
-**Change 9 — part 3 and part 4 grow a "bring your own model" section**: the provider
+- **The two parameters are wire-level, not client-level.** `extra_body` is a LiteLLM
+  concept; on the HTTP body `logprobs` and `return_token_ids` are plain top-level fields,
+  which is *why* a proxy can add them without touching the agent.
+- **\[measured\]** vLLM 0.28 (Qwen3-1.7B, one L40S) answers with `prompt_token_ids` at the
+  response root, `token_ids` on the choice, and `logprobs.content[*].logprob` — the three
+  places `lite_llm.py` reads. The same request without those parameters returns no token
+  ids at all, so the proxy is load-bearing rather than decorative.
+- **Grouping needs no client cooperation.** `X-Session-ID` (which `mini-swe-agent` sends
+  when Harbor sets a `session_id`, i.e. SkyRL's case) is the authoritative key, and
+  prefix-chaining over the message list covers everything else.
+- **The non-linear case is now detected rather than assumed away.** A request that
+  extends a conversation somewhere other than its tip is a fork — subagent, or
+  client-side compaction — and is recorded separately with `forked: true` and refused by
+  the attach step. That is the honest version of the "a proxy cannot segment this"
+  caveat: it still cannot, but it no longer corrupts the data quietly.
+- **The seam is the part that stayed a prototype.** Attaching after the job runs needs no
+  Harbor change and makes every match auditable, but the data exists *during* the trial,
+  so the end state is an installed agent accepting a rollout sink and populating
+  `agent_result.rollout_details` itself. That is the RFC, and CONTRIBUTING wants a human
+  to draft it.
+
+Untested, and needing only configuration: an installed harness **inside** an AgentCore
+session reaching the proxy over VPC mode, and SkyRL training a step from proxy-sourced
+details. See part 5's README for the full verified/unverified split.
+
+**Change 9 [shipped] — part 3 and part 4 grow a "bring your own model" section**: the provider
 prefix rule (`bedrock/`, `hosted_vllm/`, …), that `CLAUDE_CODE_USE_BEDROCK` is an
 *environment variable* rather than a model prefix, and how to check a model id is live
 (`aws bedrock list-inference-profiles`).
@@ -338,28 +407,97 @@ prefix rule (`bedrock/`, `hosted_vllm/`, …), that `CLAUDE_CODE_USE_BEDROCK` is
 
 ## Change list, ordered by value per unit of risk
 
-| # | Change | Where | Effort | Risk | Unblocks |
-|---|---|---|---|---|---|
-| 1 | Generalise `share_tasks()`, keep the SWE-smith adapter | part 1 | S | low | any dataset with a cheap per-task delta |
-| 2 | Dataset decision tree | part 1 README | S | none | any dataset |
-| 3 | Document per-task vs `env_image_key` comparison; **ship neither grouping for SWE-bench** | part 1 README | S | none | the method, taught |
-| 5 | Harness capability matrix | top README | S | none | any harness |
-| 7 | Where-the-call-originates rule | top README | S | none | any harness |
-| 9 | "Bring your own model" sections | parts 3, 4 | S | none | any model |
-| 6 | `--bake-harness`, terminus-2 included | part 1 | M | low | 12 s/trial now, 51 s for installed harnesses |
-| 4 | Build the missing 219 arm64 images | part 1 | L | medium | full SWE-bench Verified (500) |
-| 8 | Recording proxy for `mini-swe-agent` (transport is config) | new part | M–L | medium | harness-independent training |
+| # | Change | Where | Effort | Risk | Status | Unblocks |
+|---|---|---|---|---|---|---|
+| 1 | Generalise `share_tasks()`, keep the SWE-smith adapter | part 1 | S | low | **shipped** (`scripts/task_sharing.py`) | any dataset with a cheap per-task delta |
+| 2 | Dataset decision tree | part 1 README | S | none | **shipped** | any dataset |
+| 3 | Document per-task vs `env_image_key` comparison; **ship neither grouping for SWE-bench** | part 1 README | S | none | **shipped** | the method, taught |
+| 5 | Harness capability matrix | top README | S | none | **shipped** | any harness |
+| 7 | Where-the-call-originates rule | top README | S | none | **shipped** | any harness |
+| 9 | "Bring your own model" sections | parts 3, 4 | S | none | **shipped** | any model |
+| 6 | `--bake-harness`, terminus-2 included | part 1 | M | low | **shipped, not run** (recipes render; no image built) | up to 12 s/trial now, 51 s for installed harnesses |
+| 4 | Build the missing 219 arm64 images | part 1 | L | medium | **shipped and run** — 24 built, 16 gate-clean; the other 195 are qemu hours | full SWE-bench Verified (500) |
+| 8 | Recording proxy for `mini-swe-agent` (transport is config) | new part | M–L | medium | **shipped** (`part5-record-proxy/`, measured against real vLLM) | harness-independent training |
 
-**Batch A — 1, 2, 3, 5, 7, 9.** Documentation and one refactor. No behavioural risk, and
-they carry most of the generality benefit. Do them together.
+**Batch A — 1, 2, 3, 5, 7, 9. Done.** Documentation and one refactor, no behavioural
+risk, and they carry most of the generality benefit. What landed, beyond the text: the
+sharing helper is now `share_tasks()` over three callables with the SWE-smith policy as
+its only adapter, and the harness/model rules are stated with a *measured* self-test —
+`agent_result.rollout_details` is a non-empty list for a trainable harness, `[]` when
+the details were not requested, and `null` when the harness called the model itself.
 
-**Batch B — 6.** A real feature with a measured payoff on every trial, including the demo
-path.
+**Batch B — 6. Shipped as a capability, deliberately not run.** The three recipes exist
+behind `--bake-harness` and are reviewable with `--render-only`; no image has been built
+from them, so the *saving* is still a projection while the *contracts* they satisfy are
+read out of the source. The correction above is part of this batch's outcome: terminus-2's
+12.0 s was never an agent install.
 
-**Batch C — 4, then 8.** 4 is mechanical but long (qemu). 8 shrank once VPC mode turned
-out to exist on both sides: the only new component is the proxy plus the seam that gets
-`RolloutDetail` onto an installed harness's trial result. Prototype that seam before
-committing to it; if it works it is an upstream RFC, not a kit feature.
+**Batch C — 4, then 8. Both shipped and both exercised.** 8 is `part5-record-proxy/`:
+21 stub checks plus a real vLLM. 4 is
+`part1-arm64-images/scripts/build_swebench_images.py`, and it was run for real:
+
+| | |
+|---|---|
+| Selection | **\[measured\]** exactly the 219 unpublished instances, resolving to **1 base + 34 env images** |
+| Built | **24 instance images** (requests, seaborn, pylint ×3, pytest ×9, sphinx ×10) — 23/23 in one ~1 h 50 min batch on 8 vCPU under qemu |
+| Per stage | base ~7 min · env ~9 min · instance 65 s (requests) to 740 s (sphinx) |
+| Sizes | 873 MB compressed / 3.28 GB on disk — inside both ACR ceilings |
+| Durability | all 24 pushed to ECR `swebv-arm64` |
+| **Oracle gate** | **15/24 clean** first pass, **16/24** after one pin |
+
+Running it surfaced four things no amount of reading would have:
+
+1. **The build's tag is not the tag the task asks for.** A local build is
+   `sweb.eval.arm64.<id>`; a generated task dir asks for
+   `swebench/sweb.eval.arm64.<id with __ → _1776_>`. The script now applies that second
+   tag itself, otherwise every trial dies in `ImageBuildError` minutes in.
+2. **The gate failures are dependency drift, not architecture.** Six sphinx instances
+   failed with `No module named 'roman'`: docutils **0.23** resolved against Sphinx
+   **3.1.0**, which needs `<0.18`. Pinning `docutils<0.17` turned 0 passing tests into 14
+   — the exact 2 F2P + 12 P2P that failed — and a rebuild re-gated **1.000**. Same class
+   as the `flit_core` failure in part 1's SWE-smith notes, and it would happen on amd64
+   too. Hence `--pin repo=requirement`, opt-in because the right pin depends on the repo
+   version.
+3. **A re-pushed image never reaches an existing runtime.** AgentCore resolves
+   `containerUri` at *runtime creation*, so with `delete_runtime: false` the deployed
+   runtime is frozen; `--force-build` rebuilds and re-pushes and changes nothing.
+   **\[measured\]** the same pinned image gated 0.000 through the old runtime and 1.000
+   through a fresh one. Delete the runtime or change the task's content hash.
+4. **The host's role can create runtimes but not delete or read them** — `CreateAgentRuntime`
+   and `ListAgentRuntimes` are allowed, `GetAgentRuntime` and `DeleteAgentRuntime` are
+   denied. Worth knowing before planning a cleanup.
+
+### What this host could and could not run
+
+The kit was written on an 8× H100 box that has since been reclaimed; Batches B and C were
+implemented on its replacement, which is a smaller machine:
+
+| | Original host | This host |
+|---|---|---|
+| GPUs | 8× H100 80GB | **1× L40S 46GB** |
+| vCPU / RAM | 192 / 2 TB | **8 / 61 GB** |
+| Docker | working | corrupt containerd store, **repaired** (see below) |
+| qemu-aarch64 handler | registered | **registered** |
+| AWS | full | full — ECR push and `CreateAgentRuntime` both verified working |
+
+The docker store arrived unusable: its metadata referenced blobs that no longer existed
+(`blob not found`), left over from work done on another instance, so even
+`docker system prune` failed. Stopping docker and containerd, deleting the content store,
+metadata DB and snapshotter state, and restarting fixed it **and freed 30 GB** — which
+mattered, because the disk was at 97%. `tonistiigi/binfmt --install arm64` then registered
+the emulator.
+
+With that, change 4 was actually run: 24 instances built, pushed to ECR, and gated on
+AgentCore. Change 6 is still unrun by choice, not by constraint — it was scoped as "keep
+the capability, do not run it".
+
+The one thing this host still cannot do is the *whole* of change 4. Two limits, both
+measured rather than guessed: **time** — 195 instances remain, and the expensive repos
+(django ×90, matplotlib ×32, scikit-learn ×28, xarray ×22, astropy ×15, sympy ×8) are the
+ones whose env images compile C extensions under emulation rather than installing aarch64
+wheels; and **disk** — an instance image is ~3.3 GB on disk, so 219 of them need ~700 GB
+against the 38 GB free here. `--push --prune-after-push` is the answer to the second: push
+each image to ECR and drop the local copy, keeping only the 34 env images resident.
 
 ### Decisions taken in review
 

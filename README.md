@@ -2,7 +2,7 @@
 
 Amazon Bedrock AgentCore Runtime (ACR) as the sandbox provider for
 [Harbor](https://github.com/harbor-framework/harbor): build the task images, deploy
-the runtimes, evaluate a model, and run RL against it. Four parts, each a
+the runtimes, evaluate a model, and run RL against it. Five parts, each a
 self-contained directory with its own `uv` environment.
 
 | Part | What it produces |
@@ -11,10 +11,12 @@ self-contained directory with its own `uv` environment.
 | [2 · AgentCore runtimes](part2-agentcore-runtime/) | one deployed runtime per task image, and a session you can drive by hand |
 | [3 · Evaluate](part3-evaluate/) | SWE-bench Verified scores for Claude Sonnet 5 (Bedrock) and a vLLM-served Qwen3.5 |
 | [4 · Train](part4-train/) | GRPO on SWE-smith with SkyRL, held-out SWE-bench Verified as the eval set |
+| [5 · Record proxy](part5-record-proxy/) | token ids and logprobs for an *installed* harness, so `mini-swe-agent` becomes trainable |
 
-The parts chain, and part 2 is the join: parts 3 and 4 both consume the runtimes it
-deploys. Part 1 is the only expensive one (hours of qemu); parts 2–4 are minutes to
-hours depending on how much you evaluate.
+The first four chain, and part 2 is the join: parts 3 and 4 both consume the runtimes
+it deploys. Part 1 is the only expensive one (hours of qemu); parts 2–4 are minutes to
+hours depending on how much you evaluate. Part 5 is optional and sits beside part 4 —
+it exists only if you want to train a harness other than `terminus-2`.
 
 ## Start here
 
@@ -28,7 +30,7 @@ else hardcodes them.
 ## The one constraint that shapes everything
 
 **ACR only accepts arm64 images.** Almost every published SWE-* task image is
-amd64-only, and that single fact determines the structure of all four parts.
+amd64-only, and that single fact determines the structure of the whole kit.
 
 Measured by probing registry manifests one by one:
 
@@ -43,7 +45,9 @@ Measured by probing registry manifests one by one:
 Every ready-made arm64 SWE image in existence is those 281. So:
 
 - **SWE-bench Verified** works from published images, but only 281 of 500, and part 1
-  splits them **by repository** into 208 train / 73 eval. The eval number this kit
+  splits them **by repository** into 208 train / 73 eval. The other 219 can now be
+  built (`scripts/build_swebench_images.py`, **\[measured\]** one instance end to end),
+  which is qemu hours rather than a blocker. The eval number this kit
   produces is therefore *not* "SWE-bench Verified" — it is a 73-instance held-out-repo
   subset whose repo distribution differs sharply from the full 500 (46% of which is
   django). Say so whenever you quote it.
@@ -97,9 +101,10 @@ looked broken:
 
 ## Measured vs untested
 
-Everything in the per-part READMEs marked **\[measured\]** was actually run on the
-host this kit came from: 8× H100 80GB, 192 vCPU, 2 TB RAM, account in `us-west-2`.
-Anything else is a projection. In particular:
+Everything in the per-part READMEs marked **\[measured\]** was actually run. Most of it
+on the host this kit came from — 8× H100 80GB, 192 vCPU, 2 TB RAM, `us-west-2` — which
+has since been reclaimed; part 5's numbers come from its replacement, a 1× L40S box that
+cannot build images at all. Anything not marked is a projection. In particular:
 
 | Claim | Status |
 |---|---|
@@ -108,21 +113,95 @@ Anything else is a projection. In particular:
 | SWE-smith oracle gate: 108 / 119 repos clean | **\[measured\]** |
 | Warm session start 3 s median; hot session open 0.4 s | **\[measured\]** |
 | GRPO on 8× H100 with ACR rollouts, non-zero gradient path | **\[measured\]**, 4B |
+| Recording proxy: vLLM returns token ids + logprobs, turns stitched, attached to `result.json` | **\[measured\]** on the replacement host (1× L40S, vLLM 0.28) — part 5 |
+| Self-built arm64 SWE-bench images: **24 built**, **16 gate-clean**, failures traced to dependency drift and one fixed by pinning | **\[measured\]** on the replacement host — part 1 |
+| Proxy reached from *inside* a sandbox over `network_mode: VPC` | **untested.** Configuration only, but nobody has run it |
 | **Qwen3.5-9B anywhere in this kit** | **untested.** `config.env` defaults to it because that is what was asked for, but no run in this repo used a 9B policy. 4B is the largest measured. Expect to retune `MICRO_TRAIN`/`GPU_MEM_UTIL` in part 4. |
 | Claude Sonnet 5 on this eval set | **untested.** The Bedrock *path* is measured (with Opus 5 on terminal-bench), the Sonnet-5-on-SWE-bench number is not. |
 
 This kit is a working pipeline with two known-good end-to-end runs behind it. It is
 not a benchmark report.
 
+## Substituting the harness: what any harness can and cannot do here
+
+Harbor ships a lot of harnesses — 45 names wired into `AgentFactory` in the 0.23.0
+build this kit uses, `harbor run --agent <name>` or `agents[].name` in a config. They
+fall into three classes, and the class decides what you can do with one:
+
+| Class | Examples | Model call originates | Eval | Train (needs per-turn token ids + logprobs) |
+|---|---|---|---|---|
+| internal, through Harbor's LLM layer | `terminus-2`, `computer-1` | host process | yes | **yes** |
+| internal, own client | `dspy-rlm` (calls `dspy.LM` itself) | host process | yes | no |
+| installed CLI (`harbor/agents/installed/*`, 40 of the 45) | `claude-code`, `mini-swe-agent`, `swe-agent`, `codex`, `opencode`, … | **inside the sandbox** | yes | **no, today** |
+
+The remaining two, `oracle` and `nop`, call no model at all — `oracle` applies the golden
+patch, which is what part 2's gate uses to prove a task's reward path works.
+
+**The rule: any harness can be evaluated; only a harness whose model calls flow through
+Harbor's own LLM layer can be trained.** Being in-process is not enough — `dspy-rlm`
+runs on the host and still records nothing, because it brings its own client.
+
+### Testing your own harness against the rule
+
+Three checks, cheapest first:
+
+1. **Where does the class live?** `harbor/agents/installed/…` means Harbor installs a
+   CLI into the sandbox and that CLI calls the model. Nothing on the host sees the
+   traffic.
+2. **Does its options model accept `collect_rollout_details`?** In 0.23.0 exactly two
+   do: `terminus_2` and `computer_1`.
+3. **Run one trial and read `agent_result.rollout_details` in its `result.json`.** This
+   is the check that cannot be argued with, and both outcomes below are **\[measured\]**
+   in this kit, same task, same model id:
+
+   ```
+   terminus-2   "model_info": {"name": "us.anthropic.claude-sonnet-5", "provider": "bedrock"}
+                "rollout_details": []          # layer is there; details not requested
+   claude-code  "model_info": {"name": "us.anthropic.claude-sonnet-5", "provider": null}
+                "rollout_details": null        # field never applied; the CLI called out itself
+   ```
+
+   `[]` with `collect_rollout_details: true` set would mean a broken engine (vLLM must
+   return `logprobs` and `return_token_ids`); `null` means the harness is in the third
+   class and no engine flag will change it. `provider: null` is not a bug either — it is
+   Harbor recording that it does not own the routing for this call.
+
+## Where the model call originates, and why it is not a setting
+
+This is the single most consequential thing to get right, and it follows from the
+harness class above rather than from any option you can set:
+
+| | internal harness (`terminus-2`) | installed harness (`claude-code`, `mini-swe-agent`, …) |
+|---|---|---|
+| Call originates | host process | inside the sandbox |
+| Sandbox needs credentials | **no** | yes — reads the execution role off IMDS |
+| Execution role needs `bedrock:InvokeModel` | no | **yes** |
+| Sandbox needs a network path to your vLLM | no | **yes** |
+| What is exposed to the code under test | nothing | the execution role |
+
+Two consequences that catch people:
+
+- **You cannot keep the sandbox credential-free and evaluate an installed CLI.** The
+  only way to move the trust boundary is to change harness. `config.env.example` spells
+  out what granting `bedrock:InvokeModel` exposes; part 3 has both paths side by side,
+  and part 3's `configs/eval-claude-code.yaml` is the one that needs it.
+- **A locally served policy is not reachable from an installed harness by default.** ACR
+  sessions default to `PUBLIC` network mode, which gives the sandbox egress to the
+  internet but no route to a vLLM bound to this host's loopback or private address.
+  Harbor's provider does accept `network_mode: VPC` with `subnets` /
+  `security_groups` (`environment.py:171`), which puts the session on your VPC's private
+  addressing — but that reverses the posture in the table above, so scope the security
+  group to the one port. `DESIGN-generalization.md` works this through.
+
 ## Open limitation: training is pinned to the `terminus-2` harness
 
-**Status: known, accepted for now. Parts 3 and 4 both use `terminus-2`.**
+**Status: still the default, but no longer a dead end. Parts 3 and 4 both use `terminus-2`; [part 5](part5-record-proxy/) is the prototype that lifts it for `mini-swe-agent`.**
 
-Harbor lets you pick the harness (`agents[].name`, 47 available in this build), but
-only a harness whose model calls flow through Harbor's own LLM layer can produce the
-per-turn token ids and logprobs that step-wise RL needs. Today that is `terminus-2`
-and `computer-1`, and `computer-1` is a computer-use agent — so for SWE tasks the
-training harness is effectively fixed.
+The matrix above states the rule; this is the why, and what would lift it. Only a
+harness whose model calls flow through Harbor's own LLM layer can produce the per-turn
+token ids and logprobs that step-wise RL needs. Today that is `terminus-2` and
+`computer-1`, and `computer-1` is a computer-use agent — so for SWE tasks the training
+harness is effectively fixed.
 
 The mechanism is small (`llms/lite_llm.py`): when `collect_rollout_details` is on it
 asks the engine for two extra things,
@@ -163,9 +242,20 @@ histories"):
 `mini-swe-agent` is deliberately minimal (single linear conversation, no subagents), so
 it is the most likely third-party harness to become trainable through a proxy.
 
-Until then: **train with `terminus-2`.** Evaluating with a different harness is fine and
-cheap, but be explicit that the training and evaluation scaffolds then differ — which is
-exactly the comparison this kit otherwise works to keep clean.
+**That proxy now exists: [part 5](part5-record-proxy/).** It adds the two parameters,
+records what vLLM returns (**\[measured\]** against vLLM 0.28 — `prompt_token_ids` at the
+response root, `token_ids` on the choice, one logprob per completion token), stitches
+turns into rollouts without the client's help, and attaches them to
+`agent_result.rollout_details`. Two things it does *not* yet prove: that an installed
+harness inside an AgentCore session reaches it over `network_mode: VPC` (configuration,
+untested), and that SkyRL trains a step from proxy-sourced details. It also does not
+solve the two hard classes above — it *detects* them, flags the turn as forked, and
+refuses to attach, which is the most a proxy can honestly do.
+
+So the default stands: **train with `terminus-2`**, and reach for part 5 when the harness
+itself is what you need to train. Evaluating with a different harness is fine and cheap,
+but be explicit that the training and evaluation scaffolds then differ — which is exactly
+the comparison this kit otherwise works to keep clean.
 
 ## Runtime budget
 
@@ -211,7 +301,9 @@ you are already holding.
 
 ## Reading order
 
-The per-part READMEs are written to be read in order and each ends with what the next
-part expects. If you only want to understand the substrate, read
+Parts 1–4 are written to be read in order and each ends with what the next part
+expects. If you only want to understand the substrate, read
 [part 2](part2-agentcore-runtime/) — it is the shortest and it has the hands-on
-session probe.
+session probe. [Part 5](part5-record-proxy/) reads on its own and only matters if the
+harness is the thing you want to train; it is also the only part with a test you can
+run in two seconds with no GPU (`python3 scripts/selftest.py`).

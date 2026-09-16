@@ -124,6 +124,48 @@ Plus two Qwen3.5-specific flags, both taken from SkyRL's own
 - `language_model_only=true` — nothing here sends images, so the vision tower is dead
   weight in the policy, the reference model and the engine alike.
 
+## Bring your own model
+
+**Training needs weights you hold.** `bedrock/…` and any hosted API are eval-only —
+part 3 scores them, part 4 cannot train them. The policy has to be a checkpoint SkyRL
+can both shard with FSDP and serve with its own vLLM engines, which in practice means a
+local or Hub HF model directory. Set `POLICY_MODEL`, or pass it as the first argument:
+
+```bash
+scripts/run_train.sh Qwen/Qwen3.5-4B                       # the measured config
+scripts/run_train.sh /path/to/my-checkpoint                # a local directory
+```
+
+**There is no `model_name` in `configs/harbor_trial_acr.yaml` on purpose.** SkyRL owns
+the policy and injects `agent.model_name` and `agent.kwargs.api_base` per rollout,
+pointing them at its own engine — so the provider-prefix rule from part 3 applies to
+part 3's eval, not here. To see what a rollout actually used, read `agent_info` out of
+any trial's result:
+
+```bash
+f=$(ls "$KIT_WORK_DIR"/runs/<name>/trials/*/result.json | head -1)
+python -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['agent_info']); \
+  print('rollout turns:', len(d['agent_result']['rollout_details'] or []))" "$f"
+```
+
+`agent_info.model_info.provider` should name a provider and
+`agent_result.rollout_details` should be a **non-empty** list. `[]` there means the
+engine did not return `logprobs`/`return_token_ids`, and the trainer is about to train
+on nothing — see the harness matrix in the top-level README for the full check.
+
+**What has to move with the model:**
+
+| If you change | Also change |
+|---|---|
+| the context window | `MAX_MODEL_LEN` only — `run_train.sh` drives `model_info.max_input_tokens`, `trainer.algorithm.max_seq_len` and the engine's `max_model_len` from that one value, so editing the YAML instead is how they drift apart. 8 turns assumes 32k |
+| to a non-Qwen3.5 model | drop `extra_body.chat_template_kwargs.enable_thinking`; a template that does not take the kwarg is not a no-op |
+| to a text-only, non-hybrid architecture | `REMOVE_MICROBATCH_PADDING=true LANGUAGE_MODEL_ONLY=false` — both defaults exist only because Qwen3.5 is a VLM shell over hybrid attention, and sample packing is worth having back |
+| model size | `MICRO_TRAIN` / `GPU_MEM_UTIL` / `TP` / `ENGINES`, in the order in "Scaling notes" below |
+
+**What does not change:** the harness, the reward, and the task set. Swapping the policy
+does not touch the scaffold, which is why a checkpoint from here can be scored by part 3
+against the same 70 tasks with no conversion (see "Compare a checkpoint" below).
+
 ## Results
 
 **\[measured\]** on the **SWE-bench-Verified-arm64** training variant with
