@@ -7,7 +7,7 @@ self-contained directory with its own `uv` environment.
 
 | Part | What it produces |
 |---|---|
-| [1 · arm64 task images](part1-arm64-images/) | arm64 images + Harbor task dirs for SWE-smith and SWE-bench Verified, pushed to ECR |
+| [1 · arm64 task images](part1-arm64-images/) | arm64 images + Harbor task dirs for SWE-smith and SWE-bench Verified, pushed to ECR — one directory per dataset, over Harbor's own adapters |
 | [2 · AgentCore runtimes](part2-agentcore-runtime/) | one deployed runtime per task image, and a session you can drive by hand |
 | [3 · Evaluate](part3-evaluate/) | SWE-bench Verified scores for Claude Sonnet 5 (Bedrock) and a vLLM-served Qwen3.5 |
 | [4 · Train](part4-train/) | GRPO on SWE-smith with SkyRL, held-out SWE-bench Verified as the eval set |
@@ -44,9 +44,14 @@ Measured by probing registry manifests one by one:
 
 Every ready-made arm64 SWE image in existence is those 281. So:
 
+(Note what this is *not* about: converting a dataset into Harbor tasks is
+[`adapters/`](https://github.com/harbor-framework/harbor/tree/main/adapters)' job and
+there are 85 of them, two of which this kit installs as packages. Part 1 is about the
+images those generated tasks point at, which is where arm64 bites.)
+
 - **SWE-bench Verified** works from published images, but only 281 of 500, and part 1
   splits them **by repository** into 208 train / 73 eval. The other 219 can now be
-  built (`scripts/build_swebench_images.py`, **\[measured\]** one instance end to end),
+  built (`swebench/build_images.py`, **\[measured\]** one instance end to end),
   which is qemu hours rather than a blocker. The eval number this kit
   produces is therefore *not* "SWE-bench Verified" — it is a 73-instance held-out-repo
   subset whose repo distribution differs sharply from the full 500 (46% of which is

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Generate Harbor task directories for the arm64 slice of SWE-bench Verified.
 #
-#   scripts/swebench_tasks.sh data/swebv-arm64-eval.txt  "$HARBOR_DATASETS/swebv-arm64/eval"
-#   scripts/swebench_tasks.sh data/swebv-arm64-train.txt "$HARBOR_DATASETS/swebv-arm64/train"
+#   swebench/tasks.sh swebench/data/swebv-arm64-eval.txt  "$HARBOR_DATASETS/swebv-arm64/eval"
+#   swebench/tasks.sh swebench/data/swebv-arm64-train.txt "$HARBOR_DATASETS/swebv-arm64/train"
 #
 # Unlike SWE-smith, nothing is built here: these 281 instances already have
 # published `swebench/sweb.eval.arm64.*` images, so this only writes task dirs
-# that point at them. Pull the bases with scripts/prepull_arm64.sh afterwards.
+# that point at them. Pull the bases with shared/prepull_arm64.sh afterwards.
 #
 # The --arch flag is the reason this needs the kit's Harbor build. Upstream the
 # adapter hardcodes

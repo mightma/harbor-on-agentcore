@@ -4,6 +4,56 @@ ACR only runs arm64. This part produces the arm64 images and the Harbor task
 directories that reference them — for the two datasets this kit measures, and for
 whichever one you bring instead.
 
+## Step 0 · does your dataset already have an adapter?
+
+Turning a dataset into Harbor tasks is not this kit's job, and you should not write
+that code. Harbor's own [`adapters/`](https://github.com/harbor-framework/harbor/tree/main/adapters)
+directory holds **85 of them** — including several SWE-shaped ones this kit does not
+use: `swegym`, `multi-swe-bench`, `swebenchpro`, `swebench_multilingual`, `swelancer`,
+`swtbench`. Part 1 depends on exactly two of them as packages:
+
+```toml
+"harbor-swesmith-adapter @ git+.../harbor@acr-kit#subdirectory=adapters/swesmith",
+"harbor-swebench-adapter @ git+.../harbor@acr-kit#subdirectory=adapters/swebench",
+```
+
+`swebench/tasks.sh` drives one adapter's CLI and `swesmith/tasks.py` drives the other's
+class directly. Neither reimplements the conversion, and `swesmith/tasks.py`
+deliberately does not patch the adapter either — it flips `arch` on SWE-smith's profile
+registry *from outside*, so the adapter stays exactly as upstream ships it.
+
+```
+你的数据集有 adapter 吗?
+├── 有         -> generate task dirs with it, then continue below
+└── 没有       -> write one: NAME + generate_task() + run() (adapters/<any> is the model)
+```
+
+The one change this kit needed *inside* an adapter is `--arch` on the SWE-bench one:
+upstream hardcodes `spec.instance_image_key.replace("arm64", "x86_64")` because
+`make_test_spec` infers the architecture from whichever machine runs the adapter. That
+lives on the fork branch and belongs upstream (see the top-level README's commit table).
+
+**What this part adds is downstream of the adapter**, and it is all ACR-shaped: the
+adapter emits one task dir per instance with its own `environment/Dockerfile`, and on a
+1,000-runtime quota that is the problem, not the solution. So this part supplies arm64
+images the adapter's Dockerfiles can reference, and `shared/task_sharing.py` rewrites
+generated tasks so tasks with an identical environment share an image and a runtime.
+
+### The layout mirrors that split
+
+```
+part1-arm64-images/
+├── shared/     dataset-independent: task_sharing.py, prepull, pulled-subset selection
+├── swebench/   build_images.py, probe_arm64_images.py, tasks.sh, data/
+└── swesmith/   build.sh, build_images.py, prepare_images.py, tasks.py, tasks.sh, data/
+```
+
+One directory per dataset, the same shape as `adapters/<dataset>/`, so **adding a
+dataset is adding a directory** — its own builder, its own task generator, its own
+durable manifests — with `shared/` holding only what is genuinely general. Both
+directories share one `uv` environment (`pyproject.toml` at this level), because both
+adapters and both upstream packages have to coexist anyway.
+
 ## The one question that decides the cost
 
 **How many distinct *environments* does your dataset have?** Not how many tasks — how
@@ -26,9 +76,9 @@ Does your dataset publish arm64 images?
 ```
 
 The mechanism that implements the middle branch is dataset-independent and lives in
-`scripts/task_sharing.py`; `share_tasks()` takes your grouping, your image-per-group
+`shared/task_sharing.py`; `share_tasks()` takes your grouping, your image-per-group
 and your per-task setup command as three functions. The SWE-smith adapter over it
-(`share_swesmith_tasks()` in `scripts/swesmith_tasks.py`) is 13 lines of policy.
+(`share_swesmith_tasks()` in `swesmith/tasks.py`) is 13 lines of policy.
 **The rule for whether to use it at all:**
 
 > Share when the per-task delta is *local and constant* (SWE-smith: `git checkout`,
@@ -86,7 +136,7 @@ Python 3.13 is required — the SWE-bench adapter declares `>=3.13`. The two `sw
 ### Check what actually exists first
 
 ```bash
-uv run scripts/probe_arm64_images.py --dataset princeton-nlp/SWE-bench_Verified
+uv run swebench/probe_arm64_images.py --dataset princeton-nlp/SWE-bench_Verified
 ```
 
 **\[measured\]** 281 of 500 instances have a `swebench/sweb.eval.arm64.*` image. The
@@ -130,7 +180,7 @@ per trial to save a one-time build inverts the ratio, and it erodes the one prop
 this whole substrate was chosen for: the measured 3 s warm start.
 
 So the grouping is documented here and **deliberately not implemented**.
-`scripts/task_sharing.py` stays general for the datasets where the delta *is* cheap;
+`shared/task_sharing.py` stays general for the datasets where the delta *is* cheap;
 SWE-smith below is one.
 
 ### Generate task dirs
@@ -146,8 +196,8 @@ SWE-smith below is one.
 | `swebv-arm64-selfbuilt-gated.txt` | 16 | requests, seaborn, pytest, sphinx — **built here**, gate-clean (see below) |
 
 ```bash
-scripts/swebench_tasks.sh data/swebv-arm64-eval.txt  "$HARBOR_DATASETS/swebv-arm64/eval"
-scripts/swebench_tasks.sh data/swebv-arm64-train.txt "$HARBOR_DATASETS/swebv-arm64/train"
+swebench/tasks.sh swebench/data/swebv-arm64-eval.txt  "$HARBOR_DATASETS/swebv-arm64/eval"
+swebench/tasks.sh swebench/data/swebv-arm64-train.txt "$HARBOR_DATASETS/swebv-arm64/train"
 ```
 
 The split is **by repository, not random**, and that is a deliberate compromise you
@@ -172,14 +222,14 @@ amount — part 3 defaults to this list.
 
 ### Building the 219 that are not published
 
-`scripts/build_swebench_images.py` drives swebench's own base → env → instance chain
+`swebench/build_images.py` drives swebench's own base → env → instance chain
 with the architecture forced to arm64:
 
 ```bash
-uv run scripts/build_swebench_images.py --list      # the 219, and their image tags
-uv run scripts/build_swebench_images.py --dry-run   # render every Dockerfile, no docker
-uv run scripts/build_swebench_images.py --instances psf__requests-5414   # prove the path
-uv run scripts/build_swebench_images.py --concurrency 3 --push --prune-after-push
+uv run swebench/build_images.py --list      # the 219, and their image tags
+uv run swebench/build_images.py --dry-run   # render every Dockerfile, no docker
+uv run swebench/build_images.py --instances psf__requests-5414   # prove the path
+uv run swebench/build_images.py --concurrency 3 --push --prune-after-push
 ```
 
 `--prune-after-push` is not an optimisation, it is what makes a full run possible: each
@@ -210,9 +260,31 @@ is 34 builds, not 219 — and every rendered base fetches
 So a self-built arm64 image is a working task image, reward path included. The env stage
 is where the qemu time goes and it scales with the *dependency tree*, not the instance
 count: repos with published aarch64 wheels (requests, pytest, pylint) install binaries;
-matplotlib, scikit-learn and xarray compile. Order batches cheapest-first, and prefer a
-native arm64 builder (`DOCKER_HOST=ssh://<graviton>`, or CodeBuild ARM) for the rest —
-this is the most qemu-bound step in the kit.
+matplotlib, scikit-learn and xarray compile. Order batches cheapest-first.
+
+**And build on native arm64 if you possibly can.** **\[measured\]** on this host, same
+container image, same moment: a CPU-bound Python workload runs **15.5–19× slower** under
+qemu-user emulation than natively (sha256 ×200k: 0.2 s amd64 vs 3.1 s arm64; an integer
+loop ×2M: 0.4 s vs 7.7 s). That factor is the whole story of this step's cost — django's
+instance stage is **\[measured\]** ~35 min each here and is dominated by
+`git gc --prune=now --aggressive`, which is exactly that kind of work. On a Graviton
+instance the same builds should land in the low single-digit minutes:
+
+```bash
+DOCKER_HOST=ssh://ubuntu@<graviton> uv run swebench/build_images.py \
+    --instance-list <ids> --concurrency 8 --push --prune-after-push
+```
+
+Two honest caveats: that 15–19× is the *emulation* factor on this machine, not Graviton
+hardware performance, and the part of a build that is pip downloads will not speed up at
+all.
+
+**Some instances cannot be built on arm64, full stop.** **\[measured\]** two of the 219 —
+`django__django-10097` and `django__django-7530` — pin conda `python=3.5`, and linux-aarch64
+has no python 3.5 package in `defaults` or `conda-forge`, so `conda create` ends in
+`PackagesNotFoundError` after a 458 s solve. The real ceiling is **217 of 219**. Every
+other python version the unpublished set needs (3.6 through 3.11) does have aarch64
+packages, so this is the only hard exclusion.
 
 **\[measured\]** a 24-instance batch (requests 1, seaborn 1, pylint 3, pytest 9, sphinx
 10 — the four cheapest repos of the 219) on the same host: **10 env images, 23 instance
@@ -227,7 +299,7 @@ Then the gate, which is the number that matters:
 | Oracle gate clean | **15 / 24** on the first pass, **16 / 24** after one dependency pin |
 | Cause of every failure | dependency drift, **not** architecture (below) |
 
-`data/swebv-arm64-selfbuilt-gated.txt` is the resulting allowlist, the same idea as
+`swebench/data/swebv-arm64-selfbuilt-gated.txt` is the resulting allowlist, the same idea as
 SWE-smith's `gate_passing_images.txt`: build produces images, the gate says which ones
 can actually reward a correct patch.
 
@@ -251,7 +323,7 @@ it would happen identically on amd64 — which is exactly why the published imag
 a fresh build does not.
 
 ```bash
-uv run scripts/build_swebench_images.py --instances sphinx-doc__sphinx-7748 \
+uv run swebench/build_images.py --instances sphinx-doc__sphinx-7748 \
     --pin 'sphinx-doc/sphinx=docutils<0.17'
 ```
 
@@ -292,14 +364,14 @@ The script now applies that second local tag itself (`--task-namespace`, default
 `swebench`), so a generated task resolves from the local store with no editing. This was
 found by running the end-to-end, not by reading the code.
 
-`data/swebv-arm64-instances.txt` is the coverage list the default selection complements;
+`swebench/data/swebv-arm64-instances.txt` is the coverage list the default selection complements;
 it is an *output* of `probe_arm64_images.py --out`, so refresh it rather than trusting a
 stale copy.
 
 ### Pull the bases before you evaluate
 
 ```bash
-scripts/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/eval"
+shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/eval"
 ```
 
 Not optional. Each trial otherwise resolves its `FROM` against Docker Hub and dies on
@@ -315,9 +387,9 @@ overlap with the eval benchmark, and ~59k tasks over 222 repositories to draw fr
 ### Build
 
 ```bash
-scripts/build_swesmith.sh --list                     # what would be built
-scripts/build_swesmith.sh --limit 4 --concurrency 4  # prove the path on four repos
-scripts/build_swesmith.sh --concurrency 12 --push    # the real run
+swesmith/build.sh --list                     # what would be built
+swesmith/build.sh --limit 4 --concurrency 4  # prove the path on four repos
+swesmith/build.sh --concurrency 12 --push    # the real run
 ```
 
 Two stages, both in that script:
@@ -342,8 +414,8 @@ median (min 9.0, max 53.6) for `terminus-2` and **51.3 s** for `claude-code`. Ba
 makes Harbor's own idempotence checks short-circuit:
 
 ```bash
-uv run scripts/prepare_swesmith_images.py --bake-harness terminus-2 --render-only
-uv run scripts/prepare_swesmith_images.py --bake-harness claude-code --harness-version 2.1.272
+uv run swesmith/prepare_images.py --bake-harness terminus-2 --render-only
+uv run swesmith/prepare_images.py --bake-harness claude-code --harness-version 2.1.272
 ```
 
 | `--bake-harness` | Installs | What Harbor then skips |
@@ -375,11 +447,11 @@ batch: build a single image, then run the harness's own version command inside i
 
 ### Where to substitute your own dataset
 
-`scripts/swesmith_tasks.sh` applies the sharing as part of generating the tasks
+`swesmith/tasks.sh` applies the sharing as part of generating the tasks
 (`--shared-images`), and that step is the only dataset-specific part of it:
 
 ```python
-# scripts/swesmith_tasks.py -- the whole adapter, over scripts/task_sharing.py
+# swesmith/tasks.py -- the whole adapter, over shared/task_sharing.py
 share_tasks(
     output_dir,
     group_of=...,    # TaskDir -> "mewwts__addict.75284f95", off the task's FROM tag
@@ -434,19 +506,19 @@ To retry, delete the cached specs first or the fix will not apply —
 
 ```bash
 find "$SWESMITH_BUILD_ROOT/env" -name 'sweenv_*.yml' -delete
-scripts/build_swesmith.sh --repos <failed-keys> --concurrency 8 --push
+swesmith/build.sh --repos <failed-keys> --concurrency 8 --push
 ```
 
 ### Generate task dirs
 
 ```bash
-scripts/swesmith_tasks.sh
+swesmith/tasks.sh
 ```
 
 **\[measured\]** 44,489 task dirs over **119 distinct images**, ~9 minutes.
 
 The task dirs are **disposable** — that command rebuilds them. What is durable is
-`data/swesmith-manifests/`:
+`swesmith/data/`:
 
 | File | What it is |
 |---|---|
@@ -466,7 +538,7 @@ change still works.
 
 Consequence worth knowing: **the images have to exist in *your* registry.** These
 manifests describe what to build, not a public dataset you can pull. Run
-`scripts/build_swesmith.sh --push` first, or set `ECR_REGISTRY` to a registry you can
+`swesmith/build.sh --push` first, or set `ECR_REGISTRY` to a registry you can
 actually read.
 
 Keep that directory on durable storage. The scratch disk holding the task dirs was
@@ -476,7 +548,7 @@ wiped twice during this work; each time the cost was one 9-minute regeneration
 ### Verify the golden patches
 
 ```bash
-uv run scripts/check_solve_patches.py "$HARBOR_DATASETS/swesmith-arm64"
+uv run swesmith/check_solve_patches.py "$HARBOR_DATASETS/swesmith-arm64"
 ```
 
 Expect `tasks with bad hunks : 0`. If it reports non-zero, your Harbor build predates
@@ -510,4 +582,4 @@ was no throttling — 134 pulls spread over 2.5 h stayed under 100/hour.
 
 - `$HARBOR_DATASETS/swesmith-arm64` and/or `$HARBOR_DATASETS/swebv-arm64/{eval,train}`
 - images pushed to ECR (`--push`)
-- `data/swesmith-manifests/prepared.json`
+- `swesmith/data/prepared.json`

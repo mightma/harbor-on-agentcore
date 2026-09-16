@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build the arm64 SWE-smith repository images, then wrap them for shared use.
 #
-#   scripts/build_swesmith.sh --list                        # what would be built
-#   scripts/build_swesmith.sh --limit 4 --concurrency 4     # try four repos first
-#   scripts/build_swesmith.sh --concurrency 12 --push       # the real run, ~2.5 h
+#   swesmith/build.sh --list                        # what would be built
+#   swesmith/build.sh --limit 4 --concurrency 4     # try four repos first
+#   swesmith/build.sh --concurrency 12 --push       # the real run, ~2.5 h
 #
 # This is the expensive step in the whole kit. Every image is built under qemu
 # because no arm64 SWE-smith image exists anywhere; median 843 s per repo at
@@ -33,7 +33,7 @@ mkdir -p "$SWESMITH_BUILD_ROOT"
 
 # Stage 1: recreate each repo's conda env on arm64 from the published amd64 image
 # and commit it as swesmith.arm64.<repo>.
-"$PART/.venv/bin/python" -u "$HERE/build_swesmith_images.py" "$@"
+"$PART/.venv/bin/python" -u "$HERE/build_images.py" "$@"
 
 # Stage 2: bake in git, uv, /logs and every task branch (`git fetch --all`), so a
 # task's only per-task work is a local `git checkout`. This is what lets one image
@@ -48,6 +48,6 @@ push=()
 case " $* " in
   *" --push "*) push=(--push) ;;
 esac
-exec "$PART/.venv/bin/python" -u "$HERE/prepare_swesmith_images.py" \
+exec "$PART/.venv/bin/python" -u "$HERE/prepare_images.py" \
   --concurrency 12 "${push[@]+"${push[@]}"}" \
   --output "$SWESMITH_BUILD_ROOT/prepared.json"

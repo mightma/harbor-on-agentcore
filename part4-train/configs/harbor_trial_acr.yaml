@@ -81,7 +81,7 @@ environment:
     # would mean re-pushing and re-deploying it each time; keep them and clean up
     # with part2's scripts/cleanup_runtimes.py after the run.
     delete_runtime: false
-    # The arm64 bases cost Docker Hub quota to re-acquire (part1's scripts/prepull_arm64.sh),
+    # The arm64 bases cost Docker Hub quota to re-acquire (part1's shared/prepull_arm64.sh),
     # so do not drop the local tags after pushing.
     prune_local_images: false
     exec_timeout_sec: 3600

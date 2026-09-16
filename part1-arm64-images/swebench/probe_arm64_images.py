@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Find which SWE-bench Verified instances have a published arm64 image.
 
-    python scripts/probe_arm64_images.py --out run/swebv-arm64-instances.txt
-    python scripts/probe_arm64_images.py --sizes            # also report layer sizes
+    python swebench/probe_arm64_images.py --out run/swebv-arm64-instances.txt
+    python swebench/probe_arm64_images.py --sizes            # also report layer sizes
 
 AgentCore Runtime only accepts arm64, and the arm64 SWE-bench images cover a
 subset of Verified. This is how run/swebv-arm64-instances.txt was produced.

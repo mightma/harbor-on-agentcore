@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Copy the task dirs whose arm64 base image is already in the local Docker store.
 
-    python scripts/select_pulled_tasks.py \
+    python shared/select_pulled_tasks.py \
         --src $HARBOR_DATASETS/swebv-arm64/train \
         --dst $HARBOR_DATASETS/swebv-arm64/train-ready
 
-Training can start before scripts/prepull_arm64.sh has worked through the whole list —
+Training can start before shared/prepull_arm64.sh has worked through the whole list —
 prepull is paced by Docker Hub's 100/hour, so the full 208 takes hours — but a
 task whose base is not local resolves its FROM against the registry and dies as
 an ImageBuildError. In RL that is worse than in an eval: the trial is a rollout,

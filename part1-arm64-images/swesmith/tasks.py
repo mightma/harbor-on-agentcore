@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Generate Harbor tasks for SWE-smith instances that reference the arm64 repo images.
 
-    scripts/swesmith_tasks.sh --repos mewwts__addict.75284f95 \
+    swesmith/tasks.sh --repos mewwts__addict.75284f95 \
         --output-dir $HARBOR_DATASETS/swesmith-arm64
-    scripts/swesmith_tasks.sh --repos a.1234abcd,b.5678efgh --limit 200
+    swesmith/tasks.sh --repos a.1234abcd,b.5678efgh --limit 200
 
-The companion to scripts/build_swesmith_images.py: that builds the images, this makes
+The companion to swesmith/build_images.py: that builds the images, this makes
 the tasks point at them.
 
 Harbor's swesmith adapter names each task's base image through the profile
@@ -35,6 +35,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+# task_sharing.py lives in ../shared/ because the mechanism is dataset-independent;
+# this file is the SWE-smith policy over it. Scripts here are run directly
+# (`swesmith/tasks.sh`), so sys.path[0] is this directory and shared/ has to be added.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
 
 from task_sharing import ShareResult, TaskDir, report, share_tasks
 
@@ -104,7 +109,7 @@ def patch_registry_to_arm64() -> None:
         # Mirror aliases are the same profiles under a second name, and the
         # non-Python registries (Go, JS, ...) hold entries that are not callable
         # -- `registry["<a go repo>"]()` raises TypeError. Filter exactly the way
-        # scripts/build_swesmith_images.py does, so both scripts see the same set.
+        # swesmith/build_images.py does, so both scripts see the same set.
         if key.startswith("swesmith/"):
             continue
         if getattr(entry, "__module__", "") != "swesmith.profiles.python":
@@ -189,7 +194,7 @@ def main() -> None:
         "--shared-images",
         type=Path,
         default=None,
-        help="prepared.json from scripts/prepare_swesmith_images.py. Rewrites the generated "
+        help="prepared.json from swesmith/prepare_images.py. Rewrites the generated "
         "tasks to share one image (and therefore one AgentCore runtime) per "
         "repository instead of one per task. See share_swesmith_tasks(), and "
         "task_sharing.py for the same mechanism against another dataset.",
@@ -238,7 +243,7 @@ def main() -> None:
             raise SystemExit(
                 "no local arm64 image for:\n  "
                 + "\n  ".join(missing)
-                + "\nbuild them with scripts/build_swesmith.sh --repos ..."
+                + "\nbuild them with swesmith/build.sh --repos ..."
             )
 
     from swesmith_adapter.adapter import SWESmithAdapter  # noqa: PLC0415

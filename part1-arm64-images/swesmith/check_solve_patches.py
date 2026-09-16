@@ -8,7 +8,7 @@ N", the oracle scores 0.0, and the repository looks broken when only one task's
 patch was mangled. This verifies the arithmetic directly, then confirms a sample
 against real `git apply` so the pure-Python check cannot drift from git.
 
-    scripts/check_solve_patches.py $HARBOR_DATASETS/swesmith-arm64
+    swesmith/check_solve_patches.py $HARBOR_DATASETS/swesmith-arm64
 """
 
 from __future__ import annotations

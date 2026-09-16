@@ -31,16 +31,16 @@ What is left per task -- ``git checkout <instance_id>`` -- is then carried by
 task.toml, which Harbor does *not* include in the environment content hash, so
 all tasks of one repository converge on one image and one runtime.
 
-    scripts/prepare_swesmith_images.py --list
-    scripts/prepare_swesmith_images.py --concurrency 8 --push
+    swesmith/prepare_images.py --list
+    swesmith/prepare_images.py --concurrency 8 --push
 
 Optionally the harness can be baked in too (``--bake-harness``), which removes
 Harbor's per-trial agent setup. See HARNESS_LAYERS below for what each recipe
 installs, what Harbor then skips, and why terminus-2 -- which installs no agent at
 all -- still has something to bake.
 
-    scripts/prepare_swesmith_images.py --bake-harness terminus-2 --render-only
-    scripts/prepare_swesmith_images.py --bake-harness claude-code --harness-version 2.1.272
+    swesmith/prepare_images.py --bake-harness terminus-2 --render-only
+    swesmith/prepare_images.py --bake-harness claude-code --harness-version 2.1.272
 """
 
 from __future__ import annotations

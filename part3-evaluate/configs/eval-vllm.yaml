@@ -27,7 +27,7 @@ environment:
     delete_runtime: false
     # Keep the pulled arm64 base images and the built task tags in the local
     # store. Unlike the terminal-bench run, these bases cost Docker Hub quota to
-    # re-acquire (part1's scripts/prepull_arm64.sh), so throwing them away is expensive.
+    # re-acquire (part1's shared/prepull_arm64.sh), so throwing them away is expensive.
     prune_local_images: false
     # A SWE-bench test suite can sit in a single pytest invocation for a long
     # time; give a command that Harbor does not time itself the service maximum.

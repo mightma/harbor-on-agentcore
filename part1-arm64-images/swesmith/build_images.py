@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Build arm64 SWE-smith repository images so SWE-smith tasks can run on AgentCore Runtime.
 
-    scripts/build_swesmith.sh --list
-    scripts/build_swesmith.sh --limit 8 --concurrency 4
-    scripts/build_swesmith.sh --repos mewwts__addict.75284f95,arrow-py__arrow.1d70d009
-    scripts/build_swesmith.sh --limit 8 --push
+    swesmith/build.sh --list
+    swesmith/build.sh --limit 8 --concurrency 4
+    swesmith/build.sh --repos mewwts__addict.75284f95,arrow-py__arrow.1d70d009
+    swesmith/build.sh --limit 8 --push
 
 Why this is needed
 ------------------
@@ -68,7 +68,7 @@ this box has 192 vCPU, so concurrency is nearly free while each individual build
 is slow. A native arm64 builder (``DOCKER_HOST=ssh://<graviton>`` or CodeBuild
 ARM) is dramatically faster and is the right answer for the full ~130.
 
-The task side is scripts/swesmith_tasks.py, which applies the same arch override
+The task side is swesmith/tasks.py, which applies the same arch override
 to Harbor's swesmith adapter so the generated Dockerfiles reference these tags.
 """
 

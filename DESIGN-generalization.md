@@ -85,7 +85,7 @@ share_tasks(
 and document the signature as the extension point. Effort: small; the body already
 exists.
 
-**As shipped**, the helper lives in `part1-arm64-images/scripts/task_sharing.py` and
+**As shipped**, the helper lives in `part1-arm64-images/shared/task_sharing.py` and
 carries only **one** adapter — `share_swesmith_tasks()` in `swesmith_tasks.py`, group =
 repo, setup = `git checkout`. The `swebench.py` adapter this change originally proposed
 is *not* shipped, because Change 3's review decided against grouping SWE-bench Verified
@@ -164,9 +164,9 @@ per-task delta needs it, and SWE-smith already does.
 `sweb.env.*` are built locally by the `swebench` harness by design, which is why they were
 never published. So "build it yourself" means driving its own build chain under qemu.
 
-**Change 4 — `part1/scripts/build_swebench_images.py`**, mirroring
+**Change 4 — `part1/swebench/build_images.py`**, mirroring
 `build_swesmith_images.py`: drive `swebench`'s builder with `--arch arm64`, same
-concurrency/skip/report shape. Then `data/swebv-arm64-instances.txt` becomes an *output*
+concurrency/skip/report shape. Then `swebench/data/swebv-arm64-instances.txt` becomes an *output*
 of coverage probing rather than a fixed 281-line fact.
 
 ---
@@ -409,7 +409,7 @@ prefix rule (`bedrock/`, `hosted_vllm/`, …), that `CLAUDE_CODE_USE_BEDROCK` is
 
 | # | Change | Where | Effort | Risk | Status | Unblocks |
 |---|---|---|---|---|---|---|
-| 1 | Generalise `share_tasks()`, keep the SWE-smith adapter | part 1 | S | low | **shipped** (`scripts/task_sharing.py`) | any dataset with a cheap per-task delta |
+| 1 | Generalise `share_tasks()`, keep the SWE-smith adapter | part 1 | S | low | **shipped** (`shared/task_sharing.py`) | any dataset with a cheap per-task delta |
 | 2 | Dataset decision tree | part 1 README | S | none | **shipped** | any dataset |
 | 3 | Document per-task vs `env_image_key` comparison; **ship neither grouping for SWE-bench** | part 1 README | S | none | **shipped** | the method, taught |
 | 5 | Harness capability matrix | top README | S | none | **shipped** | any harness |
@@ -434,7 +434,7 @@ read out of the source. The correction above is part of this batch's outcome: te
 
 **Batch C — 4, then 8. Both shipped and both exercised.** 8 is `part5-record-proxy/`:
 21 stub checks plus a real vLLM. 4 is
-`part1-arm64-images/scripts/build_swebench_images.py`, and it was run for real:
+`part1-arm64-images/swebench/build_images.py`, and it was run for real:
 
 | | |
 |---|---|
