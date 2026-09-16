@@ -267,6 +267,22 @@ def apply_env_pins(specs, pins: dict[str, list[str]], build_root: Path) -> list[
     return patched
 
 
+def failed_env_keys(env_failed) -> set[str]:
+    """Turn build_env_images' failure list into env image keys.
+
+    It returns the failed *payloads*, not names: each one is the
+    ``(image_name, setup_scripts, dockerfile, platform, client, build_dir)`` tuple
+    that was passed to ``build_image``. So the key is element 0, and a naive
+    ``set(env_failed)`` dies with ``unhashable type: 'dict'`` on the setup_scripts
+    dict -- a branch only reachable when an env image actually fails, which is why
+    a clean batch never hit it.
+    """
+    keys = set()
+    for entry in env_failed or []:
+        keys.add(entry[0] if isinstance(entry, (tuple, list)) else str(entry))
+    return keys
+
+
 def task_facing_tag(instance_id: str, namespace: str) -> str:
     """The reference a *generated task dir* will name, which is not what we build.
 
@@ -569,8 +585,18 @@ def main() -> None:
         client, specs, args.force_rebuild, args.concurrency
     )
     if env_failed:
-        print(f"{len(env_failed)} env image(s) failed; their instances are skipped")
-        specs = [s for s in specs if s.env_image_key not in set(env_failed)]
+        dead = failed_env_keys(env_failed)
+        before = len(specs)
+        specs = [s for s in specs if s.env_image_key not in dead]
+        print(
+            f"{len(dead)} env image(s) failed, so {before - len(specs)} instance(s) "
+            f"are skipped; see their build_image.log under "
+            f"logs/build_images/env/. A PackagesNotFoundError for the python "
+            f"version means that version has no linux-aarch64 conda package and the "
+            f"instance cannot be built on arm64 at all."
+        )
+        for key in sorted(dead):
+            print(f"  dead env {key}")
 
     apply_env_pins(specs, parse_pins(args.pin), Path.cwd())
 
