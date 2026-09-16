@@ -33,6 +33,14 @@ all tasks of one repository converge on one image and one runtime.
 
     scripts/prepare_swesmith_images.py --list
     scripts/prepare_swesmith_images.py --concurrency 8 --push
+
+Optionally the harness can be baked in too (``--bake-harness``), which removes
+Harbor's per-trial agent setup. See HARNESS_LAYERS below for what each recipe
+installs, what Harbor then skips, and why terminus-2 -- which installs no agent at
+all -- still has something to bake.
+
+    scripts/prepare_swesmith_images.py --bake-harness terminus-2 --render-only
+    scripts/prepare_swesmith_images.py --bake-harness claude-code --harness-version 2.1.272
 """
 
 from __future__ import annotations
@@ -75,6 +83,111 @@ RUN git fetch --all --tags --prune && git branch -r | wc -l
 # reward of 0 on every numpy-using task, even with the golden patch applied.
 ENV OPENBLAS_CORETYPE=ARMV8
 """
+
+# --- optional harness layers (--bake-harness) ----------------------------------
+#
+# Harbor sets the agent up inside the sandbox on every trial, and that cost is
+# per-trial forever: **\[measured\]** on the 70-task SWE-bench Verified pass,
+# `agent_setup` was a 12.0 s median for terminus-2 and 51.3 s for claude-code.
+# Baking makes Harbor's own idempotence checks short-circuit, so the layer below
+# is exchanged for a one-off image cost.
+#
+# What each harness checks -- these are the contracts the recipes have to satisfy,
+# read out of harbor 0.23.0:
+#
+#   terminus-2      TmuxSession._install_recording_tools() execs `tmux -V` and
+#                   (because record_terminal_session defaults to True)
+#                   `asciinema --version` as root, and skips the apt-get when both
+#                   answer. NOTE terminus-2 installs no *agent*: it runs in the
+#                   harbor process and only shell commands cross into the sandbox.
+#                   Its 12.0 s is these two packages, plus a tmux session start
+#                   that baking does not remove -- so treat 12.0 s as a ceiling.
+#   claude-code     _installed_claude_satisfies_version(): with no `version` set it
+#                   is `command -v claude` under a PATH including ~/.local/bin;
+#                   with one set it compares `claude --version` exactly. On glibc
+#                   Harbor itself installs via the bootstrap script, so the recipe
+#                   uses the same installer rather than npm.
+#   mini-swe-agent  get_version_command() is `uv tool list | grep mini-swe-agent`,
+#                   so it must be installed *as a uv tool*, under the same user and
+#                   Python (3.12) Harbor would have used. A plain `pip install`
+#                   satisfies nothing and the install runs anyway.
+#
+# These layers are rendered and reviewed but **not yet built** -- see --render-only
+# and the caveat in the part 1 README. Validate a recipe with one image before a
+# batch: `docker build`, then run the harness's own version command inside it.
+NVM_VERSION = "v0.40.2"  # harbor/agents/installed/node_install.py
+NODE_MAJOR = 22
+MINI_SWE_PYTHON = "3.12"  # harbor/agents/installed/mini_swe_agent.py
+
+HARNESS_LAYERS: dict[str, str] = {
+    "terminus-2": """
+# Harness layer: terminus-2. Not an agent install -- terminus-2 is host-internal.
+# These are the two packages TmuxSession installs on first use; with both present
+# _install_recording_tools() logs "Both tmux and asciinema are already installed"
+# and execs no package manager.
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends tmux asciinema \\
+ && rm -rf /var/lib/apt/lists/* \\
+ && tmux -V && asciinema --version
+""",
+    "claude-code": """
+# Harness layer: claude-code. Mirrors harbor's own glibc install path
+# (claude_code.py: bootstrap.sh, not npm -- npm is its musl/Alpine branch), and
+# puts claude on the PATH the version check uses.
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends curl bash procps ca-certificates \\
+ && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://downloads.claude.ai/claude-code-releases/bootstrap.sh \\
+    | bash -s --{version_arg} \\
+ && echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+ENV PATH="/root/.local/bin:${{PATH}}"
+RUN claude --version
+""",
+    "mini-swe-agent": """
+# Harness layer: mini-swe-agent. Installed as a uv tool because that is what
+# `uv tool list | grep mini-swe-agent` -- harbor's version check -- looks at. The
+# --with extras are harbor's own: litellm's `proxy` extra is avoided on purpose.
+RUN apt-get update \\
+ && apt-get install -y --no-install-recommends curl bash git build-essential \\
+ && rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.local/bin:${{PATH}}"
+RUN uv python install {python_version} \\
+ && uv tool install --python {python_version} mini-swe-agent{version_spec} \\
+      --with litellm --with orjson --with fastapi \\
+ && mini-swe-agent --help >/dev/null \\
+ && uv tool list | grep mini-swe-agent
+""",
+}
+
+# Node is only needed on musl images, where claude-code falls back to npm. Kept
+# here so a customer adapting the recipe has the same snippet harbor uses.
+NVM_SNIPPET = f"""
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/{NVM_VERSION}/install.sh \\
+    | env -u NODE_VERSION bash \\
+ && export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" \\
+ && nvm install {NODE_MAJOR} && nvm alias default {NODE_MAJOR} && npm -v
+"""
+
+
+def harness_layer(harness: str, version: str | None) -> str:
+    """Render one harness layer, or raise for an unknown name."""
+    try:
+        template = HARNESS_LAYERS[harness]
+    except KeyError:
+        raise SystemExit(
+            f"no bake recipe for harness {harness!r}; "
+            f"known: {', '.join(sorted(HARNESS_LAYERS))}"
+        ) from None
+    return template.format(
+        version_arg=f" {version}" if version else "",
+        version_spec=f"=={version}" if version else "",
+        python_version=MINI_SWE_PYTHON,
+    )
+
+
+def dockerfile_for(base: str, harness: str | None, version: str | None) -> str:
+    body = DOCKERFILE.format(base=base)
+    return body if harness is None else body + harness_layer(harness, version)
 
 
 def sh(args: list[str], timeout: int | None = None) -> tuple[int, str]:
@@ -145,10 +258,20 @@ def ecr_login(registry: str, repository: str, region: str) -> None:
         raise SystemExit(f"docker login failed: {p.stderr}")
 
 
-def prepare_one(key: str, base: str, target: str, timeout: int, push: bool) -> dict:
+def prepare_one(
+    key: str,
+    base: str,
+    target: str,
+    timeout: int,
+    push: bool,
+    harness: str | None = None,
+    harness_version: str | None = None,
+) -> dict:
     started = time.time()
     with tempfile.TemporaryDirectory() as ctx:
-        Path(ctx, "Dockerfile").write_text(DOCKERFILE.format(base=base))
+        Path(ctx, "Dockerfile").write_text(
+            dockerfile_for(base, harness, harness_version)
+        )
         code, out = sh(
             ["docker", "build", "--platform", "linux/arm64", "--provenance=false",
              "-t", target, "-f", str(Path(ctx, "Dockerfile")), ctx],
@@ -178,6 +301,9 @@ def prepare_one(key: str, base: str, target: str, timeout: int, push: bool) -> d
     return {
         "key": key,
         "status": "ok",
+        # Recorded so a consumer can tell a plain prepared image from one carrying
+        # a harness: the tags differ, but only this says which harness.
+        **({"harness": harness} if harness else {}),
         # Recorded WITHOUT the registry host, so the manifest is portable across
         # accounts and regions -- it is a committed artifact and a fully qualified
         # ECR URI would bake in the account id that produced it. Consumers put the
@@ -203,6 +329,26 @@ def main() -> None:
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument(
+        "--bake-harness",
+        choices=sorted(HARNESS_LAYERS),
+        default=None,
+        help="Also install this harness into the image, so Harbor's per-trial agent "
+        "setup short-circuits. Changes the tag to <key>-prepared-<harness>-arm64: a "
+        "baked image is harness-specific and must not replace the shared base tag.",
+    )
+    ap.add_argument(
+        "--harness-version",
+        default=None,
+        help="Pin the baked harness version. Must equal the agent's `version` option "
+        "in the eval config, or Harbor's check fails and it reinstalls anyway.",
+    )
+    ap.add_argument(
+        "--render-only",
+        action="store_true",
+        help="Print the Dockerfile that would be built and exit. Needs no docker "
+        "daemon, and is how a new harness recipe gets reviewed before a build.",
+    )
+    ap.add_argument(
         "--output",
         type=Path,
         default=Path(
@@ -212,6 +358,15 @@ def main() -> None:
         / "prepared.json",
     )
     args = ap.parse_args()
+
+    if args.render_only:
+        # No docker, no ECR, no image list: this is a review aid for the recipes.
+        print(
+            dockerfile_for(
+                "<repo image>", args.bake_harness, args.harness_version
+            ).rstrip()
+        )
+        return
 
     images = built_images()
     if args.repos:
@@ -233,16 +388,35 @@ def main() -> None:
     if args.push:
         ecr_login(registry, args.ecr_repository, args.region)
 
+    # A baked image is not interchangeable with a plain one, so it gets its own
+    # tag rather than overwriting the tag parts 2-4 already point at.
+    suffix = (
+        PREPARED_SUFFIX
+        if not args.bake_harness
+        else f"prepared-{args.bake_harness}-arm64"
+    )
     targets = {
-        key: f"{registry}/{args.ecr_repository}:{key.replace('/', '_')}-{PREPARED_SUFFIX}"
+        key: f"{registry}/{args.ecr_repository}:{key.replace('/', '_')}-{suffix}"
         for key in images
     }
 
-    print(f"preparing {len(images)} images, concurrency {args.concurrency}, push={args.push}")
+    print(
+        f"preparing {len(images)} images, concurrency {args.concurrency}, "
+        f"push={args.push}, harness={args.bake_harness or 'none'}"
+    )
     results: list[dict] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futs = {
-            pool.submit(prepare_one, k, images[k], targets[k], args.timeout, args.push): k
+            pool.submit(
+                prepare_one,
+                k,
+                images[k],
+                targets[k],
+                args.timeout,
+                args.push,
+                args.bake_harness,
+                args.harness_version,
+            ): k
             for k in images
         }
         for fut in concurrent.futures.as_completed(futs):
