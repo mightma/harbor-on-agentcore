@@ -132,21 +132,47 @@ def main() -> int:
         if not args.task_root:
             print("\n--allowlist-out needs --task-root")
             return 2
+        # Two task shapes, the same split deploy_runtimes.sh has to make.
+        #
+        #   shared image   task.toml sets [environment].docker_image and one image
+        #                  serves many tasks (SWE-smith). One passing gate trial
+        #                  vouches for every task on that image, so the allowlist is
+        #                  "every task whose image passed".
+        #   per-task image task.toml sets nothing and each task carries its own
+        #                  environment/Dockerfile (SWE-bench). Nothing groups, the
+        #                  gate is 1:1, and the allowlist is just the tasks that
+        #                  passed.
+        #
+        # Reading only the first shape used to write an empty allowlist for the
+        # second -- silently, which for an allowlist is the worst possible failure:
+        # every consumer then restricts itself to nothing.
         image_of: dict[str, str] = {}
+        all_tasks: set[str] = set()
         for toml_path in args.task_root.glob("*/task.toml"):
+            all_tasks.add(toml_path.parent.name)
             match = re.search(r'^\s*docker_image\s*=\s*"([^"]+)"', toml_path.read_text(), re.M)
             if match:
                 image_of[toml_path.parent.name] = match.group(1)
 
+        if not all_tasks:
+            print(f"\nno task.toml under {args.task_root}; wrong --task-root?")
+            return 2
+
         passing_images = {image_of[i] for i in passing_instances if i in image_of}
-        names = sorted(n for n, image in image_of.items() if image in passing_images)
+        shared = sorted(n for n, image in image_of.items() if image in passing_images)
+        per_task = sorted(set(passing_instances) & (all_tasks - set(image_of)))
+        names = sorted(set(shared) | set(per_task))
 
         args.allowlist_out.mkdir(parents=True, exist_ok=True)
         (args.allowlist_out / "gate_passing_images.txt").write_text(
             "\n".join(sorted(unqualified_image(i) for i in passing_images)) + "\n"
         )
         (args.allowlist_out / "gate_passing_tasks.txt").write_text("\n".join(names) + "\n")
-        print(f"\nwrote {len(passing_images)} images / {len(names)} task names to {args.allowlist_out}")
+        print(
+            f"\nwrote {len(passing_images)} shared image(s) and {len(names)} task name(s) "
+            f"to {args.allowlist_out}"
+            + (f" ({len(per_task)} of them per-task images)" if per_task else "")
+        )
 
     return 0 if not failed else 1
 

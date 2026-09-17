@@ -168,6 +168,40 @@ was 37 s median.
 (terminal-bench, Opus 5) but this specific number has not been produced. Run it before
 quoting it.
 
+### Sonnet 5 on the 130 self-built instances
+
+**\[measured\]** the other direction: part 1 built arm64 images for 160 instances SWE-bench
+never published, 130 of which pass the oracle gate. Nobody had a number for those on this
+substrate, because until now they could not be run at all.
+
+| | Value |
+|---|---|
+| **Solved** | **58 / 130 = 44.6%** |
+| Scored | 129/130 (one `RuntimeError`) |
+| Cost | **$9.29** — in 5.50M tokens (4.38M cached), out 0.48M |
+| Wall clock | ~16 min at 16 concurrent |
+| Environment start, median | **3 s** — the runtimes were already deployed by part 2's gate |
+| Agent execution, median | 60 s (max 337 s) |
+| Verifier, median | 13 s |
+
+| Repo | Solved |
+|---|---|
+| django | 43 / 88 = 48.9% |
+| pytest | 6 / 9 = 66.7% |
+| scikit-learn | 2 / 3 |
+| sympy | 3 / 7 = 42.9% |
+| astropy | 2 / 8 = 25.0% |
+| sphinx | 1 / 10 = 10.0% |
+| matplotlib / seaborn / requests | 1 / 2, 0 / 1, 0 / 1 |
+
+**Do not compare 44.6% against a "SWE-bench Verified" number, including this kit's own
+70-task one.** This set is **68% django** (88 of 130) because that is where the unpublished
+instances are, while the 70-task set excludes django entirely — it is the held-out-repo
+split. Different instance mix, different difficulty, no shared repositories with the eval
+split. What the number does show is that the self-built images behave like real task
+images: a spread of per-repo solve rates in a plausible range, not a suspiciously flat 0 or
+1 that would mean the substrate was broken.
+
 Per-stage timings from the earlier terminal-bench comparison, ACR against local Docker,
 **\[measured\]** median/max:
 
