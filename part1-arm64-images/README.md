@@ -319,6 +319,51 @@ clock instead of the day-plus this would have been under emulation. Result:
 
 `swebench/data/swebv-arm64-selfbuilt.txt` is the list of 160, read back from ECR.
 
+#### Then the gate, which is what says they are usable
+
+**\[measured\]** the oracle gate over all 160, 19 min at concurrency 8:
+
+| | |
+|---|---|
+| **Gate-clean (reward 1.0)** | **130** — `swebench/data/swebv-arm64-selfbuilt-gated.txt` |
+| reward 0.0 | 3 (pylint; undiagnosed, oracle applies and 20/21 FAIL_TO_PASS pass) |
+| **could not deploy at all** | **27 (matplotlib)** — see the ceiling below |
+
+Two operational lessons came out of that run:
+
+- **A cold runtime's first invoke can time out.** One django trial died with
+  `RuntimeClientError: Runtime initialization time exceeded`; the identical trial re-run
+  scored 1.000. Retry before investigating.
+- **The docutils pin generalises.** All six sphinx instances that gated 0.000 were fixed by
+  `--pin 'sphinx-doc/sphinx=docutils<0.17'` and re-gated **1.000** — 1 verified earlier,
+  5 in a batch here.
+
+#### The 2048 MB image ceiling is real, and matplotlib does not fit
+
+All 27 deployment failures were the same error, and none of them is about the runtime quota:
+
+```
+ServiceQuotaExceededException ... CreateAgentRuntime:
+maxImageSizeMb limit exceeded for account
+```
+
+**\[measured\]** those images were **3264 MB compressed** against a django instance's 949 MB.
+The fat was the conda package cache: `/opt/miniconda3/pkgs` was **4.4 GB uncompressed**,
+against a 2.4 GB installed environment. `conda clean -afy` in the same RUN as the install
+(this is the default now; `--no-slim` turns it off) took them to **2230 MB** —
+**still over the 2048 MB limit**, and that limit is `Adjustable: False` in Service Quotas.
+
+What is left cannot be removed: 2.4 GB of declared dependencies (pandas, wx, PyQt5, numpy,
+matplotlib) plus 330 MB of `/testbed/.git`, which the verifier needs because it produces the
+patch with `git diff`. So **matplotlib's 29 unpublished instances can be built but not run on
+AgentCore Runtime**, and that is a property of the service, not of this kit. Slimming stays
+on regardless: it is a free ~1 GB per image and it keeps other repos clear of the line.
+
+Note the shape of that bug, because it is the kind this kit keeps warning about: the first
+slim rebuild appeared to succeed while changing nothing. `--force-rebuild` rebuilt the *env*
+images and then reused the cached *instance* images on top of them, pushing an unchanged
+image under the same tag. It now drops the instance tags first.
+
 #### The 59 that do not build, and why
 
 Not one of them is a defect in the builder, and only two are really *about* arm64:

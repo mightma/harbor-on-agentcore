@@ -105,6 +105,45 @@ def _run(cmd: list[str], log_path: Path, timeout: int) -> tuple[int, str]:
             return 124, f"timed out after {timeout}s"
 
 
+# Whether to strip caches inside the build (see SLIM_SETUP_ENV). A module-level
+# switch because build_image_cli's signature is fixed by upstream's call sites --
+# it is invoked positionally from build_env_images and by keyword from
+# build_instance_image, so an extra parameter would break one of them.
+SLIM = True
+
+SLIM_SETUP_ENV = """
+
+# Not upstream's. **\\[measured\\]** on a matplotlib env image, /opt/miniconda3/pkgs is
+# 4.4 GB uncompressed while the installed environment is 419 MB, which pushed the
+# image to 3264 MB compressed -- past ACR's 2048 MB ceiling, so CreateAgentRuntime
+# rejected it with "maxImageSizeMb limit exceeded". Removing the package tarballs
+# and caches leaves the environment itself untouched.
+#
+# This has to happen in *this* RUN: a later layer cannot shrink an image, it only
+# hides files. That is why it is appended to upstream's script rather than added as
+# a Dockerfile step.
+conda clean -afy || true
+rm -rf /opt/miniconda3/pkgs/* /root/.cache/pip /root/.cache/conda || true
+"""
+
+SLIM_SETUP_REPO = """
+python -m pip cache purge >/dev/null 2>&1 || true
+rm -rf /root/.cache/pip || true
+"""
+
+
+def slimmed(setup_scripts: dict) -> dict:
+    """Append cache cleanup to upstream's setup scripts, in-layer."""
+    if not SLIM or not setup_scripts:
+        return setup_scripts
+    out = dict(setup_scripts)
+    if "setup_env.sh" in out:
+        out["setup_env.sh"] = out["setup_env.sh"] + SLIM_SETUP_ENV
+    if "setup_repo.sh" in out:
+        out["setup_repo.sh"] = out["setup_repo.sh"] + SLIM_SETUP_REPO
+    return out
+
+
 def build_image_cli(
     image_name: str,
     setup_scripts: dict,
@@ -123,7 +162,7 @@ def build_image_cli(
         raise ValueError("build_dir is required")
     build_dir = Path(build_dir)
     build_dir.mkdir(parents=True, exist_ok=True)
-    for name, content in (setup_scripts or {}).items():
+    for name, content in slimmed(setup_scripts or {}).items():
         (build_dir / name).write_text(content)
     (build_dir / "Dockerfile").write_text(dockerfile)
 
@@ -513,6 +552,13 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=10800)
     parser.add_argument("--force-rebuild", action="store_true")
     parser.add_argument(
+        "--no-slim",
+        action="store_true",
+        help="Keep the conda package cache in the image. Default is to strip it: it "
+        "is ~4.4 GB uncompressed on a scientific env, which puts the image over "
+        "ACR's 2048 MB compressed ceiling and makes CreateAgentRuntime refuse it.",
+    )
+    parser.add_argument(
         "--pin",
         action="append",
         default=None,
@@ -552,6 +598,9 @@ def main() -> None:
     parser.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
     args = parser.parse_args()
 
+    global SLIM
+    SLIM = not args.no_slim
+
     ids = instance_ids(args)
     if args.limit:
         ids = ids[: args.limit]
@@ -579,6 +628,25 @@ def main() -> None:
     os.chdir(args.build_root)
     docker_build.build_image = build_image_cli
     client = docker.from_env()
+
+    if args.force_rebuild:
+        # build_env_images removes and rebuilds the *env* images, but the instance
+        # stage skips anything already tagged (build_instance_image checks
+        # client.images.get first). Without this, --force-rebuild silently rebuilt
+        # half of what it promised: a slimmed env image with a stale fat instance
+        # image on top of it, pushed under the same tag and therefore invisible.
+        for spec in specs:
+            for tag in (
+                spec.instance_image_key,
+                task_facing_tag(spec.instance_id, args.task_namespace)
+                if args.task_namespace
+                else None,
+            ):
+                if tag:
+                    subprocess.run(
+                        ["docker", "image", "rm", "-f", tag], capture_output=True
+                    )
+        print(f"--force-rebuild: dropped {len(specs)} instance image(s) first")
 
     print(f"building env images for {len(specs)} instances")
     _, env_failed = docker_build.build_env_images(

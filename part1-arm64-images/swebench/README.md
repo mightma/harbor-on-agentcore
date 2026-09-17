@@ -35,7 +35,7 @@ the rest dependency or upstream drift. The part 1 README has the table.
 | `swebv-arm64-train.txt` / `swebv-arm64-eval.txt` | 208 / 73, split by repository |
 | `swebv-arm64-eval-verified.txt` | 70 — eval minus 3 whose oracle ceiling is 0 |
 | `swebv-arm64-selfbuilt.txt` | **160 built here**, read back from ECR |
-| `swebv-arm64-selfbuilt-gated.txt` | 16 of those gate-clean so far |
+| `swebv-arm64-selfbuilt-gated.txt` | **130** of those gate-clean |
 
 ## Usage
 
