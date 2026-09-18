@@ -19,8 +19,8 @@ PART="$(cd "$HERE/.." && pwd)"
 set -a; . "$PART/../config.env"; set +a
 
 MODEL="${1:-$EVAL_BEDROCK_MODEL}"
-TASKS="${TASKS:-$HARBOR_DATASETS/swebv-arm64/test}"
-TASK_LIST="${TASK_LIST:-$PART/../part1-arm64-images/swebench/data/swebv-arm64-test-gated.txt}"
+TASKS="${TASKS:-$HARBOR_DATASETS/swebv-arm64}"
+TASK_LIST="${TASK_LIST:-$PART/../part1-arm64-images/swebench/data/swebv-arm64-gated.txt}"
 N_CONCURRENT="${N_CONCURRENT:-16}"
 JOB_NAME="${JOB_NAME:-swebv-bedrock-$(basename "$MODEL")-$(date +%Y%m%d-%H%M%S)}"
 

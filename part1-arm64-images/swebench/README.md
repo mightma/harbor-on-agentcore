@@ -39,8 +39,8 @@ the rest dependency or upstream drift. The part 1 README has the table.
 
 | `data/` file | Instances |
 |---|---|
-| **`swebv-arm64-test.txt`** | **414 / 500 — the test set** (Verified is never split) |
-| **`swebv-arm64-test-gated.txt`** | **200** with a verified oracle ceiling; report from this one |
+| **`swebv-arm64-runnable.txt`** | **414 / 500** — has an arm64 image ACR can deploy. Verified is never split, so this is the whole benchmark minus what cannot run |
+| **`swebv-arm64-gated.txt`** | **200** with a verified oracle ceiling; report from this one |
 | `swebv-arm64-instances.txt` | 281 with a published image |
 | `swebv-arm64-selfbuilt.txt` | 160 built here, read back from ECR |
 | `swebv-arm64-selfbuilt-gated.txt` | 130 of those gate-clean |
@@ -51,8 +51,8 @@ the rest dependency or upstream drift. The part 1 README has the table.
 
 ```bash
 uv run swebench/probe_arm64_images.py --out swebench/data/swebv-arm64-instances.txt
-swebench/tasks.sh swebench/data/swebv-arm64-test.txt "$HARBOR_DATASETS/swebv-arm64/test"
-shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/test"
+swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
+shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64"
 
 uv run swebench/build_images.py --list      # the 219 not published
 uv run swebench/build_images.py --dry-run   # render the Dockerfiles, no docker needed

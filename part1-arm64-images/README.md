@@ -195,16 +195,16 @@ comes from SWE-smith, which shares neither instances nor repositories with Verif
 
 | File | Instances | What it is |
 |---|---|---|
-| **`swebv-arm64-test.txt`** | **414 / 500** | **the test set** — every Verified instance with an arm64 image that ACR can deploy |
-| **`swebv-arm64-test-gated.txt`** | **200** | of those, the ones whose oracle ceiling is verified 1.0. **Report numbers from this list** |
+| **`swebv-arm64-runnable.txt`** | **414 / 500** | every Verified instance with an arm64 image ACR can deploy. This is the benchmark |
+| **`swebv-arm64-gated.txt`** | **200** | of those, the ones whose oracle ceiling is verified 1.0. **Report numbers from this list** |
 | `swebv-arm64-instances.txt` | 281 | have a *published* arm64 image (an output of `probe_arm64_images.py`) |
 | `swebv-arm64-selfbuilt.txt` | 160 | built here (an output of `build_images.py`, read back from ECR) |
-| `swebv-arm64-selfbuilt-gated.txt` | 130 | of those, gate-clean |
+| `swebv-arm64-selfbuilt-gated.txt` | 130 | of those, gate-clean — `gated` ∩ `selfbuilt`, kept because the 44.6% Sonnet 5 number is on exactly these |
 | `swebv-arm64-undeployable.txt` | 27 | built but over ACR's 2048 MB ceiling — matplotlib, see below |
 | `swebv-arm64-eval.txt` / `-eval-verified.txt` | 73 / 70 | **historical.** The old held-out-repo split's eval half; kept only because the kit's earlier measured numbers (Sonnet 5 40.0%, Qwen3.5-4B 10.0%) are on the 70 |
 
 ```bash
-swebench/tasks.sh swebench/data/swebv-arm64-test.txt "$HARBOR_DATASETS/swebv-arm64/test"
+swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
 ```
 
 Why the test set is 414 and not 500: 86 instances have no arm64 image that can run
@@ -475,7 +475,7 @@ stale copy.
 ### Pull the bases before you evaluate
 
 ```bash
-shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/test"
+shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64"
 ```
 
 Not optional. Each trial otherwise resolves its `FROM` against Docker Hub and dies on

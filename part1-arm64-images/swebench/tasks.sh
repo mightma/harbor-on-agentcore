@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Generate Harbor task directories for the arm64 slice of SWE-bench Verified.
 #
-#   swebench/tasks.sh swebench/data/swebv-arm64-test.txt "$HARBOR_DATASETS/swebv-arm64/test"
+#   swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
 #
 # Verified is a test set and this kit does not split it; training data comes from
-# SWE-smith (../swesmith/). swebv-arm64-test.txt is every instance with an arm64
+# SWE-smith (../swesmith/). swebv-arm64-runnable.txt is every instance with an arm64
 # image ACR can deploy -- 414 of the 500.
 #
 # Unlike SWE-smith, nothing is built here: these 281 instances already have
