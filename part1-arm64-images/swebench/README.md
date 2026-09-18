@@ -8,7 +8,8 @@ holds everything specific to SWE-bench Verified; `../shared/` holds what is not.
 | `tasks.sh` | drives Harbor's `swebench` adapter CLI with `--arch arm64` |
 | `probe_arm64_images.py` | which instances have a published `swebench/sweb.eval.arm64.*` image |
 | `build_images.py` | builds the ones that do not, through swebench's own base → env → instance chain |
-| `data/*.txt` | the instance lists, all of them outputs of the two scripts above |
+| `make_lists.py` | derives the rest of `data/` from ECR and from gate jobs |
+| `data/` | **empty in git.** Every list is an output; see the table in the part 1 README |
 
 ## The shape of this dataset
 
@@ -37,14 +38,18 @@ on arm64. The 59 that do not build all have identified causes — 51 of them har
 package-availability walls (scipy, `cdms2`, an ancient `setuptools`, conda `python=3.5`),
 the rest dependency or upstream drift. The part 1 README has the table.
 
-| `data/` file | Instances |
-|---|---|
-| **`swebv-arm64-runnable.txt`** | **414 / 500** — has an arm64 image ACR can deploy. Verified is never split, so this is the whole benchmark minus what cannot run |
-| **`swebv-arm64-gated.txt`** | **200** with a verified oracle ceiling; report from this one |
-| `swebv-arm64-instances.txt` | 281 with a published image |
-| `swebv-arm64-selfbuilt.txt` | 160 built here, read back from ECR |
-| `swebv-arm64-selfbuilt-gated.txt` | 130 of those gate-clean |
-| `swebv-arm64-undeployable.txt` | 27 built but over ACR's 2048 MB ceiling |
+| `data/` file (generated, not committed) | What it lists | Last measured |
+|---|---|---|
+| **`swebv-arm64-runnable.txt`** | has an arm64 image ACR can deploy — the benchmark, since Verified is never split | **414 / 500** |
+| **`swebv-arm64-gated.txt`** | of those, oracle ceiling verified 1.0. Report from this one | **200** |
+| `swebv-arm64-instances.txt` | has a *published* image | 281 |
+| `swebv-arm64-selfbuilt.txt` | was built here and pushed to ECR | 160 |
+| `swebv-arm64-selfbuilt-gated.txt` | `gated` ∩ `selfbuilt` | 130 |
+| `swebv-arm64-undeployable.txt` | built, but CreateAgentRuntime refused it as over 2048 MB | 27 |
+
+The "last measured" column is history, not content: the files are outputs, so what you
+get depends on what you have built and gated. The numbers are what this kit measured, and
+they are what the READMEs quote.
 
 ## Usage
 

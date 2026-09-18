@@ -127,6 +127,7 @@ def main() -> None:
         print(f"over the 2048 MB quota: {len(over)} {sorted(over)}")
 
     if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text("\n".join(available) + "\n")
         print(f"wrote {args.out}")
 

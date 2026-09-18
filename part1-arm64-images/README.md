@@ -121,6 +121,50 @@ directory keeps a per-task hash and deploys a runtime per task anyway.
 | distinct environments | one per instance (**deliberately**, see 1a) | one per *repository* |
 | runtimes needed | 73 (eval) or 208 (train) | **119 for 44,489 tasks** |
 
+## From nothing: the order that matters
+
+`data/` ships **empty**. Every list in it is an output, and each one has exactly one
+command that produces it — a committed list of instance ids with no reproducing command
+is a claim nobody can audit, which is why the earlier hand-made ones were deleted.
+
+| File | Produced by | Needs first |
+|---|---|---|
+| `swebv-arm64-instances.txt` | `swebench/probe_arm64_images.py --out …` | nothing (asks Docker Hub) |
+| `swebv-arm64-selfbuilt.txt` | `swebench/make_lists.py --selfbuilt` | a build with `--push` |
+| `swebv-arm64-gated.txt`, `-undeployable.txt`, `-selfbuilt-gated.txt` | `swebench/make_lists.py --from-gate <job>…` | part 2's gate |
+| `swebv-arm64-runnable.txt` | `swebench/make_lists.py --runnable` | the three above |
+| `swesmith/data/prepared.json` | `swesmith/build.sh --push` (copies it to `$KIT_STATE_DIR`) | the SWE-smith build |
+
+**The dependency that bites**: a generated task dir names an image in its `FROM`, and a
+trial that cannot resolve it fails with `ImageBuildError` minutes in. So **build the
+images before generating the task dirs**, not after. The published ones are pulled
+(`prepull_arm64.sh`), the unpublished ones are built (`build_images.py --push`), and only
+then does `tasks.sh` produce a directory whose every `FROM` resolves.
+
+```bash
+cd part1-arm64-images && uv sync
+
+# 1. coverage: which instances have a published arm64 image (~281 of 500)
+docker login                       # 281 manifest requests; anonymous is capped at 100/h
+uv run swebench/probe_arm64_images.py --out swebench/data/swebv-arm64-instances.txt
+
+# 2. build the rest. On native arm64 this is ~1.5-2 h; under qemu budget a day
+uv run swebench/build_images.py --list
+uv run swebench/build_images.py --concurrency 8 --push
+
+# 3. record what ECR now holds, then derive what can run
+uv run swebench/make_lists.py --selfbuilt --runnable
+
+# 4. task dirs for everything runnable, then pull the published bases
+swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
+shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64"
+```
+
+Part 2's gate then tells you which of those actually reward a correct patch, and
+`make_lists.py --from-gate` turns its output into `swebv-arm64-gated.txt` — the list to
+report numbers from. `--runnable` re-run after that drops whatever the gate found
+undeployable.
+
 ## Setup
 
 ```bash
@@ -191,16 +235,18 @@ one split upstream — `test`, 500 instances — and the only reason this kit ev
 else to train on. Building the missing images removed that excuse: training data now
 comes from SWE-smith, which shares neither instances nor repositories with Verified.
 
-`data/` holds the lists, so you do not have to re-probe:
+The lists live in `swebench/data/` and are **generated, not committed** — see "From
+nothing" above for which command produces which. What this kit measured, and what its
+numbers are quoted against:
 
-| File | Instances | What it is |
+| File | What it lists | Measured here |
 |---|---|---|
-| **`swebv-arm64-runnable.txt`** | **414 / 500** | every Verified instance with an arm64 image ACR can deploy. This is the benchmark |
-| **`swebv-arm64-gated.txt`** | **200** | of those, the ones whose oracle ceiling is verified 1.0. **Report numbers from this list** |
-| `swebv-arm64-instances.txt` | 281 | have a *published* arm64 image (an output of `probe_arm64_images.py`) |
-| `swebv-arm64-selfbuilt.txt` | 160 | built here (an output of `build_images.py`, read back from ECR) |
-| `swebv-arm64-selfbuilt-gated.txt` | 130 | of those, gate-clean — `gated` ∩ `selfbuilt`, kept because the 44.6% Sonnet 5 number is on exactly these |
-| `swebv-arm64-undeployable.txt` | 27 | built but over ACR's 2048 MB ceiling — matplotlib, see below |
+| **`swebv-arm64-runnable.txt`** | has an arm64 image ACR can deploy — the benchmark | **414 / 500** |
+| **`swebv-arm64-gated.txt`** | of those, oracle ceiling verified 1.0. **Report from this one** | **200** |
+| `swebv-arm64-instances.txt` | has a *published* image | 281 |
+| `swebv-arm64-selfbuilt.txt` | built here and pushed | 160 |
+| `swebv-arm64-selfbuilt-gated.txt` | `gated` ∩ `selfbuilt` — the set the 44.6% Sonnet 5 number is on | 130 |
+| `swebv-arm64-undeployable.txt` | built, then refused as over 2048 MB | 27 |
 
 ```bash
 swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"

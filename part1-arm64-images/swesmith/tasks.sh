@@ -30,9 +30,19 @@ fi
 # Default to every repo the manifest knows about; callers can override with
 # --repos. Passing the keys explicitly (rather than letting the adapter walk the
 # whole registry) is what keeps this to the repos you actually built.
+#
+# The keys are derived from prepared.json rather than read from a second file:
+# a committed list with no command that regenerates it is a list nobody can audit,
+# and this one was only ever prepared.json's `key` field filtered by status.
 extra=("$@")
 if ! printf '%s\n' "${extra[@]+"${extra[@]}"}" | grep -q -- '--repos'; then
-  extra+=(--repos "$(paste -sd, "$MANIFESTS/prepared_profile_keys.txt")")
+  keys=$("$PART/.venv/bin/python" -c '
+import json, sys
+records = json.load(open(sys.argv[1]))
+print(",".join(r["key"] for r in records if r.get("status") == "ok" and r.get("image")))
+' "$MANIFESTS/prepared.json")
+  [ -n "$keys" ] || { echo "no ok records in $MANIFESTS/prepared.json" >&2; exit 1; }
+  extra+=(--repos "$keys")
 fi
 if ! printf '%s\n' "${extra[@]}" | grep -q -- '--limit'; then
   extra+=(--limit 0)

@@ -48,6 +48,18 @@ push=()
 case " $* " in
   *" --push "*) push=(--push) ;;
 esac
-exec "$PART/.venv/bin/python" -u "$HERE/prepare_images.py" \
+"$PART/.venv/bin/python" -u "$HERE/prepare_images.py" \
   --concurrency 12 "${push[@]+"${push[@]}"}" \
   --output "$SWESMITH_BUILD_ROOT/prepared.json"
+rc=$?
+
+# prepared.json is the one artifact of this whole build that is expensive to
+# reconstruct and cheap to keep, so it lands on durable storage too rather than
+# waiting for someone to remember to copy it off the scratch disk. $KIT_STATE_DIR
+# defaults to swesmith/data/ in the repo; see config.env.example.
+if [ "$rc" -eq 0 ] && [ -n "${KIT_STATE_DIR:-}" ]; then
+  mkdir -p "$KIT_STATE_DIR"
+  cp "$SWESMITH_BUILD_ROOT/prepared.json" "$KIT_STATE_DIR/prepared.json"
+  echo "manifest copied to $KIT_STATE_DIR/prepared.json"
+fi
+exit "$rc"
