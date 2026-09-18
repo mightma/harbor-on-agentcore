@@ -322,6 +322,32 @@ def failed_env_keys(env_failed) -> set[str]:
     return keys
 
 
+def scratch_root(env_var: str, name: str) -> Path | None:
+    """Where this script writes its build context and logs.
+
+    Returns None rather than falling back to the current directory. That fallback
+    dropped a stray build root into whatever directory you happened to run from --
+    usually the repo -- and it did it even for `--list`, which needs no root at all.
+    The kit's rule is that every path comes from config.env; a missing one is a
+    mistake to report, not to paper over.
+    """
+    explicit = os.environ.get(env_var)
+    if explicit:
+        return Path(explicit)
+    work_dir = os.environ.get("KIT_WORK_DIR")
+    return Path(work_dir) / name if work_dir else None
+
+
+def require_root(root: Path | None, env_var: str) -> Path:
+    if root is None:
+        raise SystemExit(
+            f"no build root: set KIT_WORK_DIR (source config.env) or {env_var}, "
+            "or pass --build-root"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def task_facing_tag(instance_id: str, namespace: str) -> str:
     """The reference a *generated task dir* will name, which is not what we build.
 
@@ -571,10 +597,7 @@ def main() -> None:
     parser.add_argument(
         "--build-root",
         type=Path,
-        default=Path(
-            os.environ.get("SWEBENCH_BUILD_ROOT")
-            or Path(os.environ.get("KIT_WORK_DIR", ".")) / "swebv-arm64"
-        ),
+        default=scratch_root("SWEBENCH_BUILD_ROOT", "swebv-arm64"),
     )
     parser.add_argument(
         "--task-namespace",
@@ -608,13 +631,14 @@ def main() -> None:
         raise SystemExit("nothing selected")
 
     specs = arm64_specs(ids)
-    args.build_root.mkdir(parents=True, exist_ok=True)
 
     if args.list:
         print(f"{len(specs)} instances to build (arch={ARM_ARCH}):")
         for spec in specs:
             print(f"  {spec.instance_id:45} {spec.instance_image_key}")
         return
+
+    args.build_root = require_root(args.build_root, "SWEBENCH_BUILD_ROOT")
 
     if args.dry_run:
         dry_run(specs, args.build_root)

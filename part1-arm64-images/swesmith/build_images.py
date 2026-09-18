@@ -122,6 +122,32 @@ def python_profiles() -> dict[str, type]:
     return dict(sorted(out.items()))
 
 
+def scratch_root(env_var: str, name: str) -> Path | None:
+    """Where this script writes its build context and logs.
+
+    Returns None rather than falling back to the current directory. That fallback
+    dropped a stray build root into whatever directory you happened to run from --
+    usually the repo -- and it did it even for `--list`, which needs no root at all.
+    The kit's rule is that every path comes from config.env; a missing one is a
+    mistake to report, not to paper over.
+    """
+    explicit = os.environ.get(env_var)
+    if explicit:
+        return Path(explicit)
+    work_dir = os.environ.get("KIT_WORK_DIR")
+    return Path(work_dir) / name if work_dir else None
+
+
+def require_root(root: Path | None, env_var: str) -> Path:
+    if root is None:
+        raise SystemExit(
+            f"no build root: set KIT_WORK_DIR (source config.env) or {env_var}, "
+            "or pass --build-root"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def build_base(build_root: Path, timeout: int) -> None:
     from swebench.harness.dockerfiles import get_dockerfile_base
 
@@ -527,10 +553,7 @@ def main() -> None:
     parser.add_argument(
         "--build-root",
         type=Path,
-        default=Path(
-            os.environ.get("SWESMITH_BUILD_ROOT")
-            or Path(os.environ.get("KIT_WORK_DIR", ".")) / "swesmith-arm64"
-        ),
+        default=scratch_root("SWESMITH_BUILD_ROOT", "swesmith-arm64"),
     )
     parser.add_argument("--push", action="store_true", help="Also push to ECR")
     parser.add_argument(
@@ -560,7 +583,7 @@ def main() -> None:
     if not selected:
         raise SystemExit("nothing selected")
 
-    args.build_root.mkdir(parents=True, exist_ok=True)
+    args.build_root = require_root(args.build_root, "SWESMITH_BUILD_ROOT")
     build_base(args.build_root, args.timeout)
     patch_for_arm64(list(selected.values()))
 

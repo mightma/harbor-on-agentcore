@@ -190,6 +190,32 @@ def dockerfile_for(base: str, harness: str | None, version: str | None) -> str:
     return body if harness is None else body + harness_layer(harness, version)
 
 
+def scratch_root(env_var: str, name: str) -> Path | None:
+    """Where this script writes its build context and logs.
+
+    Returns None rather than falling back to the current directory. That fallback
+    dropped a stray build root into whatever directory you happened to run from --
+    usually the repo -- and it did it even for `--list`, which needs no root at all.
+    The kit's rule is that every path comes from config.env; a missing one is a
+    mistake to report, not to paper over.
+    """
+    explicit = os.environ.get(env_var)
+    if explicit:
+        return Path(explicit)
+    work_dir = os.environ.get("KIT_WORK_DIR")
+    return Path(work_dir) / name if work_dir else None
+
+
+def require_root(root: Path | None, env_var: str) -> Path:
+    if root is None:
+        raise SystemExit(
+            f"no build root: set KIT_WORK_DIR (source config.env) or {env_var}, "
+            "or pass --build-root"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def sh(args: list[str], timeout: int | None = None) -> tuple[int, str]:
     p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return p.returncode, (p.stdout or "") + (p.stderr or "")
@@ -351,11 +377,10 @@ def main() -> None:
     ap.add_argument(
         "--output",
         type=Path,
-        default=Path(
-            os.environ.get("SWESMITH_BUILD_ROOT")
-            or Path(os.environ.get("KIT_WORK_DIR", ".")) / "swesmith-arm64"
-        )
-        / "prepared.json",
+        default=(
+            (scratch_root("SWESMITH_BUILD_ROOT", "swesmith-arm64") or Path("."))
+            / "prepared.json"
+        ),
     )
     args = ap.parse_args()
 
