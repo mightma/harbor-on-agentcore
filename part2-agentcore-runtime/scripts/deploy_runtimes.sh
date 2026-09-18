@@ -2,7 +2,7 @@
 # Pre-create one AgentCore runtime per task image, and gate each one's reward path.
 #
 #   scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swesmith-arm64" 20
-#   scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swebv-arm64/eval" 16
+#   scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swebv-arm64/test" 16
 #   REPO_PREFIXES=hukkin__tomli.443a0c1b scripts/deploy_runtimes.sh <task-root> 4
 #
 # It runs Harbor's `oracle` agent over exactly one task per image. That single

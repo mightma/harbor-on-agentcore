@@ -10,7 +10,7 @@ self-contained directory with its own `uv` environment.
 | [1 · arm64 task images](part1-arm64-images/) | arm64 images + Harbor task dirs for SWE-smith and SWE-bench Verified, pushed to ECR — one directory per dataset, over Harbor's own adapters |
 | [2 · AgentCore runtimes](part2-agentcore-runtime/) | one deployed runtime per task image, and a session you can drive by hand |
 | [3 · Evaluate](part3-evaluate/) | SWE-bench Verified scores for Claude Sonnet 5 (Bedrock) and a vLLM-served Qwen3.5 |
-| [4 · Train](part4-train/) | GRPO on SWE-smith with SkyRL, held-out SWE-bench Verified as the eval set |
+| [4 · Train](part4-train/) | GRPO on SWE-smith with SkyRL, all of SWE-bench Verified as the eval set |
 | [5 · Record proxy](part5-record-proxy/) | token ids and logprobs for an *installed* harness, so `mini-swe-agent` becomes trainable |
 
 The first four chain, and part 2 is the join: parts 3 and 4 both consume the runtimes
@@ -49,13 +49,13 @@ Every ready-made arm64 SWE image in existence is those 281. So:
 there are 85 of them, two of which this kit installs as packages. Part 1 is about the
 images those generated tasks point at, which is where arm64 bites.)
 
-- **SWE-bench Verified** works from published images, but only 281 of 500, and part 1
-  splits them **by repository** into 208 train / 73 eval. The other 219 can now be
-  built (`swebench/build_images.py`, **\[measured\]** one instance end to end),
-  which is qemu hours rather than a blocker. The eval number this kit
-  produces is therefore *not* "SWE-bench Verified" — it is a 73-instance held-out-repo
-  subset whose repo distribution differs sharply from the full 500 (46% of which is
-  django). Say so whenever you quote it.
+- **SWE-bench Verified is the test set, whole and unsplit.** 281 of its 500 instances
+  have published arm64 images; part 1 builds the rest (**\[measured\]** 160 built, 130
+  gate-clean), which makes the runnable test set **414 of 500**. Quote it as "SWE-bench
+  Verified, 414 of 500 arm64-runnable", and say whether you used the 414 or the 200 whose
+  oracle ceiling is verified. An earlier version of this kit split Verified into 208 train
+  / 73 eval because only 281 instances could run at all; building the missing images
+  retired that compromise.
 - **SWE-smith** has no arm64 images at all, so part 1 builds them: 119 repository
   images under qemu, ~2.5 h at concurrency 12. That is the price of a training set
   that is disjoint from the eval benchmark.
@@ -275,7 +275,7 @@ epoch. Budget against the 1,000/account default:
 | SWE-smith, all 119 repos | 119 |
 | SWE-smith, 108 oracle-clean repos | 108 |
 | SWE-bench Verified arm64, 73 eval | 73 |
-| SWE-bench Verified arm64, 208 train | 208 |
+| SWE-bench Verified arm64, the 414-instance test set | 414 |
 
 Runtimes cost nothing idle but they do consume quota, and they accumulate: leftovers
 from earlier runs are easy to forget. `part2-agentcore-runtime/scripts/cleanup_runtimes.py --delete`

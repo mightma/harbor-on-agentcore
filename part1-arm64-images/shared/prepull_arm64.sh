@@ -2,8 +2,8 @@
 # Pull the prebuilt arm64 SWE-bench base images into the local Docker image store,
 # paced to stay under Docker Hub's anonymous rate limit.
 #
-#   shared/prepull_arm64.sh run/swebv-arm64-eval.txt          # 73 images
-#   PER_HOUR=90 shared/prepull_arm64.sh run/swebv-arm64-train.txt
+#   shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/test"
+#   PER_HOUR=90 shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/test"
 #
 # Why this exists at all: the agentcore provider builds each task's
 # environment/Dockerfile with `docker build` and no `--pull`, so a base image that

@@ -21,8 +21,8 @@ set -a; . "$PART/../config.env"; set +a
 
 MODEL="${1:-$POLICY_MODEL}"
 SERVED_NAME="${SERVED_NAME:-$(basename "$MODEL")}"
-TASKS="${TASKS:-$HARBOR_DATASETS/swebv-arm64/eval}"
-TASK_LIST="${TASK_LIST:-$PART/../part1-arm64-images/swebench/swebench/data/swebv-arm64-eval-verified.txt}"
+TASKS="${TASKS:-$HARBOR_DATASETS/swebv-arm64/test}"
+TASK_LIST="${TASK_LIST:-$PART/../part1-arm64-images/swebench/data/swebv-arm64-test-gated.txt}"
 N_CONCURRENT="${N_CONCURRENT:-24}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 PORT="${PORT:-8000}"

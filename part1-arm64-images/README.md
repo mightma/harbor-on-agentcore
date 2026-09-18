@@ -185,40 +185,38 @@ SWE-smith below is one.
 
 ### Generate task dirs
 
-`data/` already holds the instance lists, so you do not have to re-probe:
+**SWE-bench Verified is the test set. All of it. It is never split.** Verified ships
+one split upstream — `test`, 500 instances — and the only reason this kit ever carved a
+"train" half out of it was that just 281 instances had arm64 images, which left nothing
+else to train on. Building the missing images removed that excuse: training data now
+comes from SWE-smith, which shares neither instances nor repositories with Verified.
 
-| File | Instances | Repositories |
+`data/` holds the lists, so you do not have to re-probe:
+
+| File | Instances | What it is |
 |---|---|---|
-| `swebv-arm64-instances.txt` | 281 | all 12 |
-| `swebv-arm64-train.txt` | 208 | django, sympy |
-| `swebv-arm64-eval.txt` | 73 | the other nine |
-| `swebv-arm64-eval-verified.txt` | 70 | eval minus 3 with a broken ceiling |
-| `swebv-arm64-selfbuilt-gated.txt` | 16 | requests, seaborn, pytest, sphinx — **built here**, gate-clean (see below) |
+| **`swebv-arm64-test.txt`** | **414 / 500** | **the test set** — every Verified instance with an arm64 image that ACR can deploy |
+| **`swebv-arm64-test-gated.txt`** | **200** | of those, the ones whose oracle ceiling is verified 1.0. **Report numbers from this list** |
+| `swebv-arm64-instances.txt` | 281 | have a *published* arm64 image (an output of `probe_arm64_images.py`) |
+| `swebv-arm64-selfbuilt.txt` | 160 | built here (an output of `build_images.py`, read back from ECR) |
+| `swebv-arm64-selfbuilt-gated.txt` | 130 | of those, gate-clean |
+| `swebv-arm64-undeployable.txt` | 27 | built but over ACR's 2048 MB ceiling — matplotlib, see below |
+| `swebv-arm64-eval.txt` / `-eval-verified.txt` | 73 / 70 | **historical.** The old held-out-repo split's eval half; kept only because the kit's earlier measured numbers (Sonnet 5 40.0%, Qwen3.5-4B 10.0%) are on the 70 |
 
 ```bash
-swebench/tasks.sh swebench/data/swebv-arm64-eval.txt  "$HARBOR_DATASETS/swebv-arm64/eval"
-swebench/tasks.sh swebench/data/swebv-arm64-train.txt "$HARBOR_DATASETS/swebv-arm64/train"
+swebench/tasks.sh swebench/data/swebv-arm64-test.txt "$HARBOR_DATASETS/swebv-arm64/test"
 ```
 
-The split is **by repository, not random**, and that is a deliberate compromise you
-have to state whenever you quote a number from it. Training on a benchmark's own
-instances is nobody's preferred design; the table above forced it. Splitting by repo
-at least makes the eval a held-out-*repository* generalisation measure (train on
-django/sympy, evaluate on sphinx / pytest / astropy / requests / pylint / sklearn /
-matplotlib / seaborn / flask) rather than held-out-instance. Two caveats travel with
-the number:
+Why the test set is 414 and not 500: 86 instances have no arm64 image that can run
+here — 59 that cannot be built at all (see below) and 27 built but too large for ACR.
+Say **"SWE-bench Verified, 414 of 500 arm64-runnable"** when you quote a number, and
+say which of the two lists you used. What you must *not* do is call any subset of this
+"SWE-bench Verified" without qualification.
 
-- It is **not "SWE-bench Verified"**. It is a 73-instance held-out-repo subset whose
-  repository mix is nothing like the full 500 (46% django).
-- The training data still comes from the eval benchmark. To separate them properly,
-  use SWE-smith below — that path leaves the eval set untouched and only changes
-  `RL_TRAIN_DATA` in part 4.
-
-`swebv-arm64-eval-verified.txt` is the 70 of 73 that score 1.0 with the oracle agent.
-Two sphinx instances have PASS_TO_PASS tests that fail independently of their own
-patch, and `psf__requests-2317`'s verifier hangs on network calls. Scoring a policy
-against tasks whose ceiling is 0 just depresses the number by a fixed, uninteresting
-amount — part 3 defaults to this list.
+Of the 414, **200 have a verified oracle ceiling** so far (70 published + 130
+self-built). The rest are runnable but ungated: an instance whose own golden patch does
+not score 1.0 cannot reward a correct answer, and scoring a policy against it only
+subtracts a constant. Gate them (part 2) before adding them to a reported number.
 
 ### Building the 219 that are not published
 
@@ -477,7 +475,7 @@ stale copy.
 ### Pull the bases before you evaluate
 
 ```bash
-shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/eval"
+shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/test"
 ```
 
 Not optional. Each trial otherwise resolves its `FROM` against Docker Hub and dies on

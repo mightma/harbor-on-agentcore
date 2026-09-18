@@ -64,7 +64,7 @@ RUN_NAME="${RUN_NAME:-swesmith-$SERVED_NAME}"
 
 SKYRL_DIR="${SKYRL_DIR:-$KIT_WORK_DIR/skyrl}"
 RL_TRAIN_DATA="${RL_TRAIN_DATA:-$HARBOR_DATASETS/swesmith-arm64-train}"
-RL_EVAL_DATA="${RL_EVAL_DATA:-$HARBOR_DATASETS/swebv-arm64/eval}"
+RL_EVAL_DATA="${RL_EVAL_DATA:-$HARBOR_DATASETS/swebv-arm64/test}"
 
 # Both are load-bearing on this host and both fail late and confusingly.
 #

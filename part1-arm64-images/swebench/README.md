@@ -12,6 +12,14 @@ holds everything specific to SWE-bench Verified; `../shared/` holds what is not.
 
 ## The shape of this dataset
 
+**It is a test set, not a training set.** Verified ships a single `test` split of 500
+instances and this kit no longer carves a train half out of it; training data comes from
+SWE-smith next door, which shares neither instances nor repositories. (The official
+SWE-bench *does* have a 19,008-instance train split over 35 other repositories, and it is
+unusable here for a more fundamental reason than missing images: **\[measured\]**
+swebench's `MAP_REPO_VERSION_TO_SPECS` has environment specs for **0 of those 35 repos**,
+so `make_test_spec` cannot even construct a spec, let alone build an image.)
+
 **One image per instance, deliberately.** Instances of the same repository span years and
 different dependency versions, so the coarsest grouping with an identical installed
 environment is `env_image_key` — 40 groups for 500 instances — but *within* a group the
@@ -31,18 +39,20 @@ the rest dependency or upstream drift. The part 1 README has the table.
 
 | `data/` file | Instances |
 |---|---|
-| `swebv-arm64-instances.txt` | 281 published |
-| `swebv-arm64-train.txt` / `swebv-arm64-eval.txt` | 208 / 73, split by repository |
-| `swebv-arm64-eval-verified.txt` | 70 — eval minus 3 whose oracle ceiling is 0 |
-| `swebv-arm64-selfbuilt.txt` | **160 built here**, read back from ECR |
-| `swebv-arm64-selfbuilt-gated.txt` | **130** of those gate-clean |
+| **`swebv-arm64-test.txt`** | **414 / 500 — the test set** (Verified is never split) |
+| **`swebv-arm64-test-gated.txt`** | **200** with a verified oracle ceiling; report from this one |
+| `swebv-arm64-instances.txt` | 281 with a published image |
+| `swebv-arm64-selfbuilt.txt` | 160 built here, read back from ECR |
+| `swebv-arm64-selfbuilt-gated.txt` | 130 of those gate-clean |
+| `swebv-arm64-undeployable.txt` | 27 built but over ACR's 2048 MB ceiling |
+| `swebv-arm64-eval.txt` / `-eval-verified.txt` | 73 / 70 — historical, from the retired split |
 
 ## Usage
 
 ```bash
 uv run swebench/probe_arm64_images.py --out swebench/data/swebv-arm64-instances.txt
-swebench/tasks.sh swebench/data/swebv-arm64-eval.txt "$HARBOR_DATASETS/swebv-arm64/eval"
-shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/eval"
+swebench/tasks.sh swebench/data/swebv-arm64-test.txt "$HARBOR_DATASETS/swebv-arm64/test"
+shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64/test"
 
 uv run swebench/build_images.py --list      # the 219 not published
 uv run swebench/build_images.py --dry-run   # render the Dockerfiles, no docker needed

@@ -71,7 +71,7 @@ await sandbox.stop()
 scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swesmith-arm64" 20
 
 # SWE-bench Verified arm64 eval slice: 73 runtimes
-scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swebv-arm64/eval" 16
+scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swebv-arm64/test" 16
 ```
 
 **\[measured\]** 119 runtimes in **19 minutes** at `-n 20`.

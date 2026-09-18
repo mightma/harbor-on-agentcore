@@ -19,7 +19,7 @@ scripts/run_eval_bedrock.sh                    # $EVAL_BEDROCK_MODEL
 scripts/run_eval_vllm.sh                       # $POLICY_MODEL, serves on GPU 0
 ```
 
-Both default to `swebench/data/swebv-arm64-eval-verified.txt` — the 70 of 73 eval tasks whose
+Both default to `swebench/data/swebv-arm64-test-gated.txt` — the 200 test-set tasks whose
 oracle ceiling is 1.0. The other three are excluded on purpose: two sphinx instances
 have PASS_TO_PASS tests that fail regardless of the patch, and `psf__requests-2317`'s
 verifier hangs on network calls. Including them subtracts a constant from every score
@@ -253,5 +253,5 @@ the GPU you are already holding.
 ## What part 4 reuses from here
 
 - `configs/eval-vllm.yaml`'s scaffold, mirrored in `part4-train/configs/harbor_trial_acr.yaml`
-- `$HARBOR_DATASETS/swebv-arm64/eval` as the **validation** set
+- `$HARBOR_DATASETS/swebv-arm64/test` as the **validation** set
 - the same deployed runtimes

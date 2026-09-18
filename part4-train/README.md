@@ -5,13 +5,16 @@ GRPO with SkyRL on 8× H100, every rollout's sandbox an ACR session.
 | | |
 |---|---|
 | Train | SWE-smith arm64, restricted to the oracle-clean images from part 2 |
-| Eval | SWE-bench Verified arm64, held-out repositories |
+| Eval | SWE-bench Verified arm64 — the whole test set, never split |
 | Policy | `$POLICY_MODEL` |
 | Trainer | SkyRL, FSDP, GRPO |
 
-The train/eval split is why part 1 bothered building SWE-smith images at all: no shared
-instances **and no shared repositories**. The SWE-bench-only setup could not offer that
-— there, training data came from the eval benchmark itself.
+SWE-smith is why the eval set can stay whole: it shares no instances **and no
+repositories** with Verified, so nothing has to be held back. An earlier version of this
+kit trained on 208 Verified instances and evaluated on the other 73 -- the only option
+when just 281 instances had arm64 images at all. Part 1 building the missing images
+retired that compromise, and the 4B numbers below come from it, so read them as the shape
+of the output rather than as this configuration's result.
 
 ## Layers
 
