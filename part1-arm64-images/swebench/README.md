@@ -53,16 +53,30 @@ they are what the READMEs quote.
 
 ## Usage
 
+In dependency order -- images first, because a task dir names its image in `FROM` and an
+unresolvable `FROM` only fails once a trial is minutes in:
+
 ```bash
+# 1. which instances already have a published image
+docker login
 uv run swebench/probe_arm64_images.py --out swebench/data/swebv-arm64-instances.txt
+
+# 2. build the rest (inspect first; --dry-run needs no docker)
+uv run swebench/build_images.py --list
+uv run swebench/build_images.py --dry-run
+uv run swebench/build_images.py --concurrency 8 --push       # add --prune-after-push on a small disk
+
+# 3. derive what exists and what can run
+uv run swebench/make_lists.py --selfbuilt --runnable
+
+# 4. task dirs, then pull the published bases
 swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
 shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64"
-
-uv run swebench/build_images.py --list      # the 219 not published
-uv run swebench/build_images.py --dry-run   # render the Dockerfiles, no docker needed
-uv run swebench/build_images.py --instance-list <ids> --concurrency 3 \
-    --push --prune-after-push
 ```
+
+Part 2 gates them; `make_lists.py --from-gate <job>...` turns that into
+`swebv-arm64-gated.txt`, and re-running `--runnable` afterwards drops anything the gate
+found undeployable.
 
 Everything else — why the arch override is needed, the timings, the task-facing tag, the
 `--pin` lever for dependency drift, and what the gate found — is in the part 1 README and

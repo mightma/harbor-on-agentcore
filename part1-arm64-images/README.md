@@ -180,7 +180,8 @@ Python 3.13 is required — the SWE-bench adapter declares `>=3.13`. The two `sw
 ### Check what actually exists first
 
 ```bash
-uv run swebench/probe_arm64_images.py --dataset princeton-nlp/SWE-bench_Verified
+docker login   # 500 manifest requests; anonymous Docker Hub is capped at 100/hour/IP
+uv run swebench/probe_arm64_images.py --out swebench/data/swebv-arm64-instances.txt
 ```
 
 **\[measured\]** 281 of 500 instances have a `swebench/sweb.eval.arm64.*` image. The
@@ -227,52 +228,6 @@ So the grouping is documented here and **deliberately not implemented**.
 `shared/task_sharing.py` stays general for the datasets where the delta *is* cheap;
 SWE-smith below is one.
 
-### Generate task dirs
-
-**SWE-bench Verified is the test set. All of it. It is never split.** Verified ships
-one split upstream — `test`, 500 instances — and the only reason this kit ever carved a
-"train" half out of it was that just 281 instances had arm64 images, which left nothing
-else to train on. Building the missing images removed that excuse: training data now
-comes from SWE-smith, which shares neither instances nor repositories with Verified.
-
-The lists live in `swebench/data/` and are **generated, not committed** — see "From
-nothing" above for which command produces which. What this kit measured, and what its
-numbers are quoted against:
-
-| File | What it lists | Measured here |
-|---|---|---|
-| **`swebv-arm64-runnable.txt`** | has an arm64 image ACR can deploy — the benchmark | **414 / 500** |
-| **`swebv-arm64-gated.txt`** | of those, oracle ceiling verified 1.0. **Report from this one** | **200** |
-| `swebv-arm64-instances.txt` | has a *published* image | 281 |
-| `swebv-arm64-selfbuilt.txt` | built here and pushed | 160 |
-| `swebv-arm64-selfbuilt-gated.txt` | `gated` ∩ `selfbuilt` — the set the 44.6% Sonnet 5 number is on | 130 |
-| `swebv-arm64-undeployable.txt` | built, then refused as over 2048 MB | 27 |
-
-```bash
-swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
-```
-
-The kit's older numbers (Sonnet 5 28/70 = 40.0%, Qwen3.5-4B 7/70 = 10.0%) were measured
-on a 70-instance list that no longer ships as a file, because it needs no file: those 70
-are exactly `swebv-arm64-gated.txt` ∩ `swebv-arm64-instances.txt` — the instances that
-both have a published image and passed the oracle gate. Reproduce with
-
-```bash
-comm -12 <(sort swebench/data/swebv-arm64-gated.txt) \
-         <(sort swebench/data/swebv-arm64-instances.txt) > /tmp/old-70.txt
-```
-
-Why the test set is 414 and not 500: 86 instances have no arm64 image that can run
-here — 59 that cannot be built at all (see below) and 27 built but too large for ACR.
-Say **"SWE-bench Verified, 414 of 500 arm64-runnable"** when you quote a number, and
-say which of the two lists you used. What you must *not* do is call any subset of this
-"SWE-bench Verified" without qualification.
-
-Of the 414, **200 have a verified oracle ceiling** so far (70 published + 130
-self-built). The rest are runnable but ungated: an instance whose own golden patch does
-not score 1.0 cannot reward a correct answer, and scoring a policy against it only
-subtracts a constant. Gate them (part 2) before adding them to a reported number.
-
 ### Building the 219 that are not published
 
 `swebench/build_images.py` drives swebench's own base → env → instance chain
@@ -282,7 +237,8 @@ with the architecture forced to arm64:
 uv run swebench/build_images.py --list      # the 219, and their image tags
 uv run swebench/build_images.py --dry-run   # render every Dockerfile, no docker
 uv run swebench/build_images.py --instances psf__requests-5414   # prove the path
-uv run swebench/build_images.py --concurrency 3 --push --prune-after-push
+uv run swebench/build_images.py --concurrency 8 --push           # the real run
+uv run swebench/build_images.py --concurrency 8 --push --prune-after-push   # tight disk
 ```
 
 `--prune-after-push` is not an optimisation, it is what makes a full run possible: each
@@ -526,6 +482,62 @@ found by running the end-to-end, not by reading the code.
 `swebench/data/swebv-arm64-instances.txt` is the coverage list the default selection complements;
 it is an *output* of `probe_arm64_images.py --out`, so refresh it rather than trusting a
 stale copy.
+
+### Generate task dirs
+
+**SWE-bench Verified is the test set. All of it. It is never split.** Verified ships
+one split upstream — `test`, 500 instances — and the only reason this kit ever carved a
+"train" half out of it was that just 281 instances had arm64 images, which left nothing
+else to train on. Building the missing images removed that excuse: training data now
+comes from SWE-smith, which shares neither instances nor repositories with Verified.
+
+The lists live in `swebench/data/` and are **generated, not committed** — see "From
+nothing" above for which command produces which. What this kit measured, and what its
+numbers are quoted against:
+
+| File | What it lists | Measured here |
+|---|---|---|
+| **`swebv-arm64-runnable.txt`** | has an arm64 image ACR can deploy — the benchmark | **414 / 500** |
+| **`swebv-arm64-gated.txt`** | of those, oracle ceiling verified 1.0. **Report from this one** | **200** |
+| `swebv-arm64-instances.txt` | has a *published* image | 281 |
+| `swebv-arm64-selfbuilt.txt` | built here and pushed | 160 |
+| `swebv-arm64-selfbuilt-gated.txt` | `gated` ∩ `selfbuilt` — the set the 44.6% Sonnet 5 number is on | 130 |
+| `swebv-arm64-undeployable.txt` | built, then refused as over 2048 MB | 27 |
+
+The list to generate from is `swebv-arm64-runnable.txt`, and it does not exist until the
+build above has pushed something, because it is derived from what is actually in ECR:
+
+```bash
+uv run swebench/make_lists.py --selfbuilt --runnable
+swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
+```
+
+**This section comes after the build for a reason.** A generated task dir names its image
+in `FROM`, so generating before building produces task dirs whose images do not exist —
+and that surfaces as an `ImageBuildError` several minutes into a trial rather than at
+generation time. The canonical order is the block at the top of this README; the sections
+here are the detail behind each of its steps, in the same order.
+
+The kit's older numbers (Sonnet 5 28/70 = 40.0%, Qwen3.5-4B 7/70 = 10.0%) were measured
+on a 70-instance list that no longer ships as a file, because it needs no file: those 70
+are exactly `swebv-arm64-gated.txt` ∩ `swebv-arm64-instances.txt` — the instances that
+both have a published image and passed the oracle gate. Reproduce with
+
+```bash
+comm -12 <(sort swebench/data/swebv-arm64-gated.txt) \
+         <(sort swebench/data/swebv-arm64-instances.txt) > /tmp/old-70.txt
+```
+
+Why the test set is 414 and not 500: 86 instances have no arm64 image that can run
+here — 59 that cannot be built at all (see below) and 27 built but too large for ACR.
+Say **"SWE-bench Verified, 414 of 500 arm64-runnable"** when you quote a number, and
+say which of the two lists you used. What you must *not* do is call any subset of this
+"SWE-bench Verified" without qualification.
+
+Of the 414, **200 have a verified oracle ceiling** so far (70 published + 130
+self-built). The rest are runnable but ungated: an instance whose own golden patch does
+not score 1.0 cannot reward a correct answer, and scoring a policy against it only
+subtracts a constant. Gate them (part 2) before adding them to a reported number.
 
 ### Pull the bases before you evaluate
 
