@@ -201,10 +201,19 @@ comes from SWE-smith, which shares neither instances nor repositories with Verif
 | `swebv-arm64-selfbuilt.txt` | 160 | built here (an output of `build_images.py`, read back from ECR) |
 | `swebv-arm64-selfbuilt-gated.txt` | 130 | of those, gate-clean — `gated` ∩ `selfbuilt`, kept because the 44.6% Sonnet 5 number is on exactly these |
 | `swebv-arm64-undeployable.txt` | 27 | built but over ACR's 2048 MB ceiling — matplotlib, see below |
-| `swebv-arm64-eval.txt` / `-eval-verified.txt` | 73 / 70 | **historical.** The old held-out-repo split's eval half; kept only because the kit's earlier measured numbers (Sonnet 5 40.0%, Qwen3.5-4B 10.0%) are on the 70 |
 
 ```bash
 swebench/tasks.sh swebench/data/swebv-arm64-runnable.txt "$HARBOR_DATASETS/swebv-arm64"
+```
+
+The kit's older numbers (Sonnet 5 28/70 = 40.0%, Qwen3.5-4B 7/70 = 10.0%) were measured
+on a 70-instance list that no longer ships as a file, because it needs no file: those 70
+are exactly `swebv-arm64-gated.txt` ∩ `swebv-arm64-instances.txt` — the instances that
+both have a published image and passed the oracle gate. Reproduce with
+
+```bash
+comm -12 <(sort swebench/data/swebv-arm64-gated.txt) \
+         <(sort swebench/data/swebv-arm64-instances.txt) > /tmp/old-70.txt
 ```
 
 Why the test set is 414 and not 500: 86 instances have no arm64 image that can run

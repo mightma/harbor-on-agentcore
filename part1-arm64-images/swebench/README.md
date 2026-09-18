@@ -45,7 +45,6 @@ the rest dependency or upstream drift. The part 1 README has the table.
 | `swebv-arm64-selfbuilt.txt` | 160 built here, read back from ECR |
 | `swebv-arm64-selfbuilt-gated.txt` | 130 of those gate-clean |
 | `swebv-arm64-undeployable.txt` | 27 built but over ACR's 2048 MB ceiling |
-| `swebv-arm64-eval.txt` / `-eval-verified.txt` | 73 / 70 — historical, from the retired split |
 
 ## Usage
 
