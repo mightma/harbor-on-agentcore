@@ -5,15 +5,24 @@
 #   swesmith/build.sh --limit 4 --concurrency 4     # try four repos first
 #   swesmith/build.sh --concurrency 12 --push       # the real run, ~2.5 h
 #
-# This is the expensive step in the whole kit. Every image is built under qemu
-# because no arm64 SWE-smith image exists anywhere; median 843 s per repo at
-# concurrency 12 on a 192-vCPU host.
+# This is the expensive step in the whole kit, and which half of it is emulated
+# depends on the host:
+#
+#   x86 host    every image is built under qemu, because no arm64 SWE-smith image
+#               exists anywhere. **\[measured\]** median 843 s per repo at concurrency
+#               12 on a 192-vCPU host, ~2.5 h total.
+#   arm64 host  the builds are native. Only the dependency-spec recovery is emulated:
+#               it runs the published *amd64* image to `conda env export`, because
+#               upstream published images and never specs. **\[measured\]** 38 s per
+#               repo on a c7gd.8xlarge, so ~11 min across 134 -- and everything
+#               expensive runs natively, which makes this path faster on Graviton
+#               than on the x86 host it was written for.
 #
 # Two things that will waste hours if you skip them:
 #
-#   1. The qemu binfmt handler must be registered, and it disappears on some
-#      hosts (it vanished mid-session repeatedly while this was being written).
-#      This script refuses to start without it.
+#   1. The binfmt handler for whichever architecture is *foreign to this host* must
+#      be registered, and it does not survive a reboot. This script checks for the
+#      right one and refuses to start without it.
 #   2. Docker Hub's anonymous pull limit is 100/hour/IP and a full run makes ~134
 #      pulls of the amd64 source images. Log in, or build in two batches.
 set -euo pipefail
@@ -22,9 +31,26 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PART="$(cd "$HERE/.." && pwd)"
 set -a; . "$PART/../config.env"; set +a
 
-if [ ! -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
-  echo "qemu-aarch64 binfmt handler is not registered; arm64 builds will fail." >&2
-  echo "  docker run --privileged --rm tonistiigi/binfmt --install arm64" >&2
+# Check for the emulator this host is missing, not for a fixed one. The old check
+# asked for qemu-aarch64 unconditionally, which on an arm64 host demanded emulation
+# for its own native architecture and told the operator to install something that
+# would do nothing.
+case "$(uname -m)" in
+  aarch64 | arm64)
+    # Native arm64 builds; the amd64 export step is the foreign one.
+    need_handler=qemu-x86_64
+    need_install=amd64
+    ;;
+  *)
+    # arm64 is foreign here, and it is what every image is built for.
+    need_handler=qemu-aarch64
+    need_install=arm64
+    ;;
+esac
+
+if [ ! -e "/proc/sys/fs/binfmt_misc/$need_handler" ]; then
+  echo "$need_handler binfmt handler is not registered ($(uname -m) host)." >&2
+  echo "  docker run --privileged --rm tonistiigi/binfmt --install $need_install" >&2
   exit 1
 fi
 
