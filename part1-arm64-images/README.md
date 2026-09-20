@@ -131,7 +131,7 @@ is a claim nobody can audit, which is why the earlier hand-made ones were delete
 |---|---|---|
 | `swebv-arm64-instances.txt` | `swebench/probe_arm64_images.py --out …` | nothing (asks Docker Hub) |
 | `swebv-arm64-selfbuilt.txt` | `swebench/make_lists.py --selfbuilt` | a build with `--push` |
-| `swebv-arm64-gated.txt`, `-undeployable.txt`, `-selfbuilt-gated.txt` | `swebench/make_lists.py --from-gate <job>…` | part 2's gate |
+| `swebv-arm64-gated.txt`, `-undeployable.txt`, `-selfbuilt-gated.txt` | `swebench/make_lists.py --from-gate <job>…` | **part 2's gate** — these three are facts about instances, so they live here, but only part 2 can measure them. See "The oracle gate" in the top-level README |
 | `swebv-arm64-runnable.txt` | `swebench/make_lists.py --runnable` | the three above |
 | `swesmith/data/prepared.json` | `swesmith/build.sh --push` (copies it to `$KIT_STATE_DIR`) | the SWE-smith build |
 

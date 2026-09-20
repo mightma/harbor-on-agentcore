@@ -104,6 +104,32 @@ looked broken:
   builds, so every reward was 0 while the training loop happily reported steps. A
   dead reward path looks exactly like a hard benchmark.
 
+## The oracle gate, since half this document refers to it
+
+**Run the official answer and check it scores 1.0.** Harbor ships a model-free agent
+called `oracle` that applies the task's own golden patch — the human fix from the original
+pull request — and then runs the verifier unchanged. The patch *is* the correct answer, so
+the reward must be 1.0. Anything less means one thing: **this task cannot reward a correct
+solution.** Its image, its tests or its verifier is broken.
+
+That matters because a dead reward path is invisible where it does the most damage. In an
+eval it looks like a hard benchmark; in an RL loop the steps run, the checkpoints land, and
+every reward is 0, which looks exactly like a bad model. This kit hit it twice and neither
+announced itself: `import numpy` SIGILLing inside the microVM (OpenBLAS picking an SVE
+kernel), and an adapter's `.strip()` deleting the single space that is a blank context line
+in a unified diff, so `git apply` rejected every golden patch it touched.
+
+So the rule the whole kit follows: **a task that has not passed the gate does not count
+toward any number.** Part 2's `deploy_runtimes.sh` runs it as the third of three jobs in one
+pass — build and push the wrapped image, create the runtime, then oracle it — and
+`part1/swebench/make_lists.py --from-gate` turns the result into the list parts 3 and 4
+restrict themselves to.
+
+**\[measured\]** the whole arm64-runnable set, 438 tasks: **397 clean (90.6%)**, 13 with a
+broken reward path, 27 refused a runtime for exceeding ACR's 2048 MB image ceiling, 1
+transient. django (229/229) and sympy (74/74) are perfect; matplotlib is 4/31 entirely
+because of the size ceiling.
+
 ## Measured vs untested
 
 Everything in the per-part READMEs marked **\[measured\]** was actually run. Most of it
