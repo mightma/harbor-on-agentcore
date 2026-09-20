@@ -164,11 +164,37 @@ That 3 s is the entire point of part 2: the runtimes and images already existed,
 trial only opens a session. The cold path — build, push, deploy, wait for READY, open —
 was 37 s median.
 
-**Claude Sonnet 5 on this task set is untested.** The Bedrock path is exercised
-(terminal-bench, Opus 5) but this specific number has not been produced. Run it before
-quoting it.
+### Claude Sonnet 5 on the whole arm64-runnable set
 
-### Sonnet 5 on the 130 self-built instances
+**\[measured\]** the 397 gate-clean instances — every SWE-bench Verified instance that has
+an arm64 image ACR can deploy *and* a verified oracle ceiling, 79.4% of the benchmark.
+terminus-2, 8 turns, 32k, temperature 0, 16 concurrent:
+
+| | Value |
+|---|---|
+| **Solved** | **186 / 397 = 46.9%** |
+| Scored | 397/397, **0 errors** |
+| Cost | **$28.03** — in 16.50M tokens (13.06M cached), out 1.43M |
+| Wall clock | **44.6 min**, achieved concurrency 14.9× of 16 |
+| Environment start, median | **3 s** (max 6 s) |
+| Agent execution, median | 62 s (max 332 s) |
+| Verifier, median | 12 s |
+
+| Repo | Solved | | Repo | Solved |
+|---|---|---|---|---|
+| django | 116/229 = 50.7% | | pylint | 2/7 = 28.6% |
+| sympy | 36/74 = 48.6% | | requests | 1/5 = 20.0% |
+| sphinx | 15/36 = 41.7% | | scikit-learn | 2/4 |
+| pytest | 8/19 = 42.1% | | matplotlib | 0/4 |
+| astropy | 5/16 = 31.2% | | seaborn / flask | 0/2, 1/1 |
+
+**Read this as a scaffold number, not a model number.** 8 turns at 32k with no retries and
+temperature 0 is chosen to match part 4's training scaffold, not to maximise a score;
+published SWE-bench Verified results for frontier models use far larger budgets. What it is
+good for is exactly what this kit needs: a baseline measured on the same scaffold the RL
+rollouts use.
+
+### Superseded: Sonnet 5 on 130 self-built instances
 
 **\[measured\]** the other direction: part 1 built arm64 images for 160 instances SWE-bench
 never published, 130 of which pass the oracle gate. Nobody had a number for those on this
@@ -202,8 +228,10 @@ split. What the number does show is that the self-built images behave like real 
 images: a spread of per-repo solve rates in a plausible range, not a suspiciously flat 0 or
 1 that would mean the substrate was broken.
 
-Per-stage timings from the earlier terminal-bench comparison, ACR against local Docker,
-**\[measured\]** median/max:
+A different, older comparison, kept because it measures something the one above does not:
+**terminal-bench with an *installed* agent** (claude-code), where the agent install is a
+real cost and the trials are much longer. ACR against local Docker, **\[measured\]**
+median/max:
 
 | Stage | agentcore | docker |
 |---|---|---|
@@ -216,6 +244,67 @@ Per-stage timings from the earlier terminal-bench comparison, ACR against local 
 ACR is *faster* at agent install because a session gets 2 dedicated vCPUs, while 40
 local containers fight over 8 cores. The two 600 s entries are build timeouts, and that
 14 s median *includes* first-time image push and runtime deployment.
+
+## AgentCore or Docker: measured head to head, same scaffold
+
+One config, one switch — `SANDBOX=docker` flips the provider and changes nothing else, so
+the two runs cannot drift apart in anything but the sandbox:
+
+```bash
+scripts/run_eval_bedrock.sh                                  # AgentCore
+SANDBOX=docker N_CONCURRENT=16 scripts/run_eval_bedrock.sh   # local containers
+uv run scripts/compare_jobs.py "$HARBOR_JOBS/<job-a>" "$HARBOR_JOBS/<job-b>"
+```
+
+**\[measured\]** all 397 tasks on both, Sonnet 5, 16 concurrent, on one c7gd.8xlarge:
+
+| | AgentCore | Docker |
+|---|---|---|
+| Solved | 186/397 = **46.9%** | 183/397 = **46.1%** |
+| Errors | 0 | 0 |
+| Environment start, median | 3 s | 3 s |
+| Agent setup / agent / verifier, median | 12 / 62 / 12 s | 11 / 59 / 13 s |
+| **Trial time, summed** | **666.0 min** | **665.6 min** |
+| Wall clock | 44.6 min | 45.7 min |
+| Achieved concurrency | 14.9× | 14.5× |
+| Model cost | $28.03 | $28.64 |
+
+**Per-trial speed is identical** — 666.0 against 665.6 minutes of summed trial time, a 0.06%
+difference. A warm AgentCore runtime opens a microVM as fast as docker starts a container
+(3 s median both ways), which is the whole reason part 2 keeps the runtimes deployed. A
+40-task pilot had docker 10% slower; at 397 that vanished, so treat small-sample timing
+gaps as noise.
+
+**What differs is the concurrency ceiling, not the speed.** Docker's is this host's CPU: a
+container is 2 vCPU, so 32 vCPU tops out near 16. AgentCore's is service-side and was
+nowhere near reached — during the docker run this box was saturated, during the AgentCore
+run its load average sat at **0.1**. That only matters above about vCPU/2 concurrent, which
+is exactly where part 4 lives: RL rollouts at concurrency 96 would need 192 vCPU of local
+containers.
+
+**Cost is model tokens, either way.** $28 of Sonnet 5 dwarfs the sandbox: docker's is the
+instance you are already renting (~$1 of c7gd.8xlarge for 45 minutes), and AgentCore's is
+397 sessions × 91 s ≈ **10 hours of session time billed separately** — it is *not* in
+Harbor's `cost_usd`, which counts model tokens only. Check Cost Explorer for the real
+figure; the role on this host could not (`ce:GetCostAndUsage` denied).
+
+### The number that should change how you read every other number
+
+`compare_jobs.py` compares per task, not just in aggregate, and the two runs **disagreed on
+55 of 397 tasks — they agreed on 86%**. Not a sandbox effect: the disagreements run both
+ways, and the sandbox cannot change whether a patch compiles. It is `temperature: 0` not
+being deterministic end to end — server-side batching, KV-cache reuse and floating-point
+reduction order all move logits between otherwise identical requests.
+
+A 13.9% flip rate, roughly symmetric, puts the standard deviation of a single 397-task run
+at **about ±1.8 percentage points**. So:
+
+- 46.9% versus 46.1% is **inside the noise**. Neither sandbox is better at solving tasks.
+- Comparing two models, or two checkpoints, on one run of this set cannot resolve a
+  difference smaller than roughly **4 points**. Part 4's warning that "a 70-task eval set
+  cannot resolve 10% from 13%" is the same fact with a smaller n.
+- Report n and the scaffold with any number from here, and re-run before believing a small
+  delta.
 
 ## Reading the output
 

@@ -5,6 +5,7 @@
 #   scripts/run_eval_bedrock.sh                                  # $EVAL_BEDROCK_MODEL
 #   scripts/run_eval_bedrock.sh us.anthropic.claude-sonnet-5
 #   N_CONCURRENT=8 scripts/run_eval_bedrock.sh                   # go gentler
+#   SANDBOX=docker N_CONCURRENT=12 scripts/run_eval_bedrock.sh   # same scaffold, local containers
 #
 # No GPU and no local serving: terminus-2 runs in this process and calls Bedrock
 # with this host's credentials. The sandbox only ever sees shell commands, so its
@@ -22,6 +23,15 @@ MODEL="${1:-$EVAL_BEDROCK_MODEL}"
 TASKS="${TASKS:-$HARBOR_DATASETS/swebv-arm64}"
 TASK_LIST="${TASK_LIST:-$PART/../part1-arm64-images/swebench/data/swebv-arm64-gated.txt}"
 N_CONCURRENT="${N_CONCURRENT:-16}"
+# SANDBOX=docker runs the identical scaffold against local containers instead of
+# AgentCore sessions, which is the only honest way to compare the two: one config,
+# one switch, so the two runs cannot drift apart in anything but the sandbox.
+#
+# The ceiling moves when you flip it. On AgentCore the limit is the service's
+# session-creation rate and each rollout gets its own 2 vCPU microVM, so this host
+# stays idle; on docker every container is 2 vCPU of *this* box, so N_CONCURRENT
+# above ~vCPU/2 only makes each trial slower. Set it deliberately.
+SANDBOX="${SANDBOX:-agentcore}"
 JOB_NAME="${JOB_NAME:-swebv-bedrock-$(basename "$MODEL")-$(date +%Y%m%d-%H%M%S)}"
 
 export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
@@ -61,7 +71,7 @@ if [ "${#include_flags[@]}" -eq 0 ]; then
   echo "no instance filter: running every task under $TASKS" >&2
 fi
 
-echo "job=$JOB_NAME model=bedrock/$MODEL"
+echo "job=$JOB_NAME model=bedrock/$MODEL sandbox=$SANDBOX"
 echo "pool=$(find "$TASKS" -mindepth 1 -maxdepth 1 -type d | wc -l) from $TASKS" \
      "selected=$((${#include_flags[@]} / 2)) n=$N_CONCURRENT"
 # pool is how many task dirs exist, selected is how many will actually run: the task
@@ -76,6 +86,7 @@ unset AWS_BEARER_TOKEN_BEDROCK
 set +e
 "$PART/.venv/bin/harbor" run -c "$config" -p "$TASKS" \
   "${include_flags[@]+"${include_flags[@]}"}" \
+  -e "$SANDBOX" \
   -n "$N_CONCURRENT" \
   -o "$HARBOR_JOBS" --job-name "$JOB_NAME" "${@:2}" 2>&1 \
   | sed 's/\x1b\[[0-9;]*m//g' \

@@ -146,7 +146,9 @@ cannot build images at all. Anything not marked is a projection. In particular:
 | GRPO on 8× H100 with ACR rollouts, non-zero gradient path | **\[measured\]**, 4B |
 | Recording proxy: vLLM returns token ids + logprobs, turns stitched, attached to `result.json` | **\[measured\]** on the replacement host (1× L40S, vLLM 0.28) — part 5 |
 | Self-built arm64 SWE-bench images: **160 built, 130 gate-clean**; 27 exceed ACR's 2048 MB image ceiling and cannot be deployed at all | **\[measured\]** — part 1 |
-| Claude Sonnet 5 on those 130 self-built instances: **58/130 = 44.6%**, $9.29 | **\[measured\]** — part 3 (68% django; not comparable to the 70-task held-out-repo set) |
+| **Claude Sonnet 5 on all 397 gate-clean instances: 186/397 = 46.9%**, $28.03, 0 errors | **\[measured\]** — part 3 |
+| The same 397 on **local docker** instead of AgentCore: 183/397 = 46.1%, trial time within **0.06%** | **\[measured\]** — per-trial speed is identical; only the concurrency ceiling differs |
+| Two runs of the same 397 tasks disagree on **55 of them** at `temperature: 0` | **\[measured\]** — ±1.8 pt of noise, so deltas under ~4 points are unresolvable in one run |
 | Native arm64 is 16× faster per image than qemu (131 s vs 2112 s for a django instance) | **\[measured\]** c7gd.8xlarge vs 8-vCPU x86 |
 | Proxy reached from *inside* a sandbox over `network_mode: VPC` | **untested.** Configuration only, but nobody has run it |
 | **Qwen3.5-9B anywhere in this kit** | **untested.** `config.env` defaults to it because that is what was asked for, but no run in this repo used a 9B policy. 4B is the largest measured. Expect to retune `MICRO_TRAIN`/`GPU_MEM_UTIL` in part 4. |
