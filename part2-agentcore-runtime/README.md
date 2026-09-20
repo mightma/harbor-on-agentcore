@@ -135,6 +135,32 @@ uv run scripts/gate_report.py "$HARBOR_JOBS"/gate-* "$HARBOR_JOBS"/regate \
 Job dirs merge left to right, so the re-gate supersedes the original for anything it
 re-ran. The allowlist it writes is what parts 3 and 4 restrict themselves to.
 
+### Turn the gate into what parts 3 and 4 consume
+
+For SWE-bench the gate is 1:1 with tasks, and its result feeds two different shapes:
+
+```bash
+# the lists (part 3 filters with these)
+cd ../part1-arm64-images
+uv run swebench/make_lists.py --from-gate "$HARBOR_JOBS"/gate-<timestamp> --runnable
+
+# a directory of only the gate-clean tasks (part 4 needs this shape)
+swebench/tasks.sh swebench/data/swebv-arm64-gated.txt "$HARBOR_DATASETS/swebv-arm64-gated"
+```
+
+Both, because the two parts filter differently and only one of them *can* filter. Part 3
+takes `TASK_LIST` and excludes by instance id, so it can point at the full task directory.
+**Part 4 cannot**: SkyRL takes a directory and treats everything in it as the validation
+set, so a task that never passes the gate contributes an exception or a permanent reward
+of 0 to every epoch — indistinguishable from a model that cannot solve it. Hence the
+second directory; `run_train.sh` defaults to it and refuses to start without it.
+
+**\[measured\]** the first full pass over SWE-bench Verified's arm64-runnable set, 438
+tasks at concurrency 8: **397 clean (90.6%)**, 13 with a broken reward path, 27 refused a
+runtime for exceeding the 2048 MB image ceiling, 1 transient. django 229/229, sympy 74/74,
+pytest 19/19, astropy 16/16; sphinx 36/44, pylint 7/10, requests 5/8; matplotlib 4/31,
+which is the size ceiling rather than anything about the tasks.
+
 The 11 that still fail are two groups, and only the second might be a real reward
 problem:
 

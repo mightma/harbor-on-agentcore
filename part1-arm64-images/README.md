@@ -163,7 +163,12 @@ shared/prepull_arm64.sh "$HARBOR_DATASETS/swebv-arm64"
 Part 2's gate then tells you which of those actually reward a correct patch, and
 `make_lists.py --from-gate` turns its output into `swebv-arm64-gated.txt` — the list to
 report numbers from. `--runnable` re-run after that drops whatever the gate found
-undeployable.
+undeployable. One more `tasks.sh` after the gate gives part 4 the shape it needs, since
+SkyRL filters by directory rather than by list:
+
+```bash
+swebench/tasks.sh swebench/data/swebv-arm64-gated.txt "$HARBOR_DATASETS/swebv-arm64-gated"
+```
 
 ## Setup
 

@@ -64,7 +64,7 @@ RUN_NAME="${RUN_NAME:-swesmith-$SERVED_NAME}"
 
 SKYRL_DIR="${SKYRL_DIR:-$KIT_WORK_DIR/skyrl}"
 RL_TRAIN_DATA="${RL_TRAIN_DATA:-$HARBOR_DATASETS/swesmith-arm64-train}"
-RL_EVAL_DATA="${RL_EVAL_DATA:-$HARBOR_DATASETS/swebv-arm64}"
+RL_EVAL_DATA="${RL_EVAL_DATA:-$HARBOR_DATASETS/swebv-arm64-gated}"
 
 # Both are load-bearing on this host and both fail late and confusingly.
 #
@@ -156,10 +156,24 @@ if [ ! -d "$RL_TRAIN_DATA" ]; then
   exit 1
 fi
 
+# SkyRL takes a *directory* of tasks with no per-task filter, so unlike part 3 the
+# oracle gate cannot be applied here with a task list: whatever is in this directory is
+# the validation set. A task that never passes the gate contributes an exception or a
+# permanent reward of 0 to every epoch, which is indistinguishable from a model that
+# cannot solve it. Hence a directory generated from the gated list.
+if [ ! -d "$RL_EVAL_DATA" ]; then
+  echo "no eval set at $RL_EVAL_DATA" >&2
+  echo "it holds the gate-clean task dirs; after part 2's gate, generate them with:" >&2
+  echo "  cd ../part1-arm64-images && swebench/tasks.sh \\" >&2
+  echo "      swebench/data/swebv-arm64-gated.txt \"\$HARBOR_DATASETS/swebv-arm64-gated\"" >&2
+  exit 1
+fi
+
 # -L: make_train_set.sh symlinks the task dirs.
 n_train=$(find "$RL_TRAIN_DATA/" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | wc -l)
+n_eval=$(find "$RL_EVAL_DATA/" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) | wc -l)
 echo "run=$RUN_NAME model=$MODEL"
-echo "train=$RL_TRAIN_DATA ($n_train tasks)  eval=$RL_EVAL_DATA"
+echo "train=$RL_TRAIN_DATA ($n_train tasks)  eval=$RL_EVAL_DATA ($n_eval tasks)"
 echo "steps=$MAX_STEPS"
 echo "rollouts/step=$((BATCH * N_SAMPLES)) concurrency=$CONCURRENCY gpus=$POLICY_GPUS engines=${ENGINES}xTP${TP}"
 

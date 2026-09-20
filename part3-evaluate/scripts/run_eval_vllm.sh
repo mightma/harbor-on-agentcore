@@ -73,8 +73,11 @@ if [ "${#include_flags[@]}" -eq 0 ]; then
 fi
 
 echo "job=$JOB_NAME model=$MODEL served=$SERVED_NAME"
-echo "tasks=$(find "$TASKS" -mindepth 1 -maxdepth 1 -type d | wc -l) from $TASKS" \
+echo "pool=$(find "$TASKS" -mindepth 1 -maxdepth 1 -type d | wc -l) from $TASKS" \
      "selected=$((${#include_flags[@]} / 2)) n=$N_CONCURRENT gpus=$SERVE_GPUS dp=$DP"
+# pool is how many task dirs exist, selected is how many will actually run: the task
+# directory is generated before the gate, so it still holds the tasks the gate later
+# rejected. TASK_LIST is what excludes them.
 
 echo "serving $MODEL as $SERVED_NAME on :$PORT"
 CUDA_VISIBLE_DEVICES="$SERVE_GPUS" "$VLLM" serve "$MODEL" \
