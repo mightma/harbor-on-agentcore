@@ -322,12 +322,19 @@ you are already holding.
 - An AWS account with AgentCore Runtime available in your region, plus an execution
   role (see `config.env.example` for exactly what it must allow, and what granting
   `bedrock:InvokeModel` exposes).
-- Docker with the arm64 qemu handler registered — **re-assert this before every build
-  session**, it disappears on this host:
+- Docker, with the emulation your host is missing. **Re-assert it before every build
+  session** — the registration does not survive a reboot:
   ```bash
+  # x86 host: the images you are building are arm64
   [ -e /proc/sys/fs/binfmt_misc/qemu-aarch64 ] || \
     docker run --privileged --rm tonistiigi/binfmt --install arm64
+
+  # arm64 host: only part 1's SWE-smith builder needs this, to run the published
+  # amd64 image and export its conda environment
+  [ -e /proc/sys/fs/binfmt_misc/qemu-x86_64 ] || \
+    docker run --privileged --rm tonistiigi/binfmt --install amd64
   ```
+  An arm64 host needs **no** emulation for the SWE-bench path, which is arm64 end to end.
 - `uv`, and Python 3.12+.
 - For parts 3–4: NVIDIA GPUs. Part 4 as written assumes 8; part 3's vLLM path needs 1
   for a 4B.

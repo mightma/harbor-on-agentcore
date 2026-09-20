@@ -562,6 +562,21 @@ overlap with the eval benchmark, and ~59k tasks over 222 repositories to draw fr
 
 ### Build
 
+**First, the emulator this path needs and the SWE-bench path does not.** `build_images.py`
+runs the published *amd64* image to export its conda environment, because upstream never
+published the spec — so an arm64 host needs x86 emulation, and an x86 host needs arm64:
+
+```bash
+docker run --privileged --rm tonistiigi/binfmt --install amd64   # on Graviton
+docker run --privileged --rm tonistiigi/binfmt --install arm64   # on x86
+```
+
+**\[measured\]** that emulated step costs **38 s per repository** (the amd64 pull, which is
+not emulated, costs 23 s), so ~11 minutes across 134 repositories at concurrency 8. Every
+expensive stage — `conda env create`, the repo install, baking the branches — runs natively
+on arm64, which is why this path is *faster* on Graviton than on the x86 host it was written
+for, emulator and all.
+
 ```bash
 swesmith/build.sh --list                     # what would be built
 swesmith/build.sh --limit 4 --concurrency 4  # prove the path on four repos
