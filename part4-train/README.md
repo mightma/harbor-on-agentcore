@@ -290,6 +290,60 @@ cd ../part3-evaluate
 scripts/run_eval_vllm.sh "$KIT_WORK_DIR/runs/swesmith-Qwen3.5-35B-A3B/exports/global_step_15"
 ```
 
+## Async or synchronous, and why it is not only a schedule
+
+**Async is the default.** Under `colocate_all` the engines share the policy's GPUs and
+must sleep while training, so the two phases are strictly exclusive — and since agentic
+rollouts dominate the step (8 turns of model call plus sandbox exec, then a pytest suite),
+the GPUs sit idle for most of the wall clock *by construction*. Async gives generation its
+own GPUs and lets the two overlap.
+
+```bash
+scripts/run_train.sh             # async: 6 policy GPUs + 2 engine GPUs
+ASYNC=0 scripts/run_train.sh     # colocated, synchronous, all 8
+```
+
+### The three things async changes
+
+**1. The GPUs are split, and the split is forced by arithmetic.** FSDP full-shard state is
+16 bytes/param (params bf16 2 + grads bf16 2 + Adam *m,v* fp32 8 + fp32 master 4), so for
+35.95B on 143 GB H200s — **\[computed, not measured\]**:
+
+| policy GPUs | FSDP state per GPU | |
+|---|---|---|
+| 8 | 71.9 GB | sync default (engines colocated) |
+| 7 | 82.2 GB | |
+| **6** | **95.9 GB** | **async default**, 47 GB spare for activations |
+| 5 | 115.0 GB | 28 GB spare, tight |
+| 4 | 143.8 GB | **does not fit at all** |
+
+So the async split is **6 + 2**, not upstream's 4 + 4: a quarter of this model's optimizer
+state does not fit on one H200. The two engine GPUs carry 72 GB of weights each at TP=1
+(`ENGINES=2 TP=1`), leaving ~57 GB of KV cache per replica at `GPU_MEM_UTIL=0.9` — they
+have the card to themselves, so there is nothing to leave room for.
+
+**2. Rollouts go stale.** `max_staleness_steps=4`: a trajectory group scheduled at step *i*
+may be trained at step *j* with *j − i ≤ 4*. Larger values buy throughput and more
+off-policy-ness. `num_parallel_generation_workers` must satisfy
+`BATCH ≤ workers ≤ BATCH × (staleness + 1)`, which the script checks.
+
+**3. The loss function changes — this is the one that surprises people.** Async cannot
+recompute old logprobs, because the policy that produced a rollout is already gone. The
+objective therefore has to be anchored on the *rollout* logprobs, and SkyRL asserts it:
+`regular` (the sync default), `gspo`, `cispo`, `dual_clip` and others are **rejected**
+outright for async. The default flips to `rollout_is`, which is what upstream's own async
+recipe uses.
+
+**So an async run and a sync run differ in algorithm, not just in schedule.** Their reward
+curves are not directly comparable, and the 4B numbers in this README came from the sync
+path. If you want a throughput comparison with the algorithm held fixed, there is no such
+configuration — that is a property of SkyRL, not of this kit.
+
+Async also needs a different entrypoint (`main_harbor_fully_async`, which swaps in
+`FullyAsyncRayPPOTrainer`); setting `trainer.fully_async.enabled=true` alone does nothing,
+because `BasePPOExp.get_trainer()` hardcodes the synchronous trainer. `run_train.sh`
+selects the entrypoint from `ASYNC`.
+
 ## Swapping AgentCore for local docker
 
 ```bash

@@ -10,29 +10,46 @@
 # evaluation benchmark share no instances and no repositories, which the
 # SWE-bench-only setup could not offer (see part 1).
 #
-#   scripts/run_train.sh                                  # $POLICY_MODEL
-#   scripts/run_train.sh Qwen/Qwen3.5-4B ENGINES=8 TP=1   # the measured config
+#   scripts/run_train.sh                                  # async, $POLICY_MODEL
+#   ASYNC=0 scripts/run_train.sh                          # colocated and synchronous
 #   MAX_STEPS=1 CONCURRENCY=16 BATCH=8 scripts/run_train.sh   # shakedown, do this first
 #
-# Sizing the engine grid, which is the one thing you cannot leave at a default
-# when the policy grows. With colocate_all the vLLM engines live on the *same*
-# GPUs as the FSDP policy, so both have to fit. For Qwen3.5-35B-A3B --
-# **[computed, not measured]** 35.95B params, bf16:
+# Async by default, and it is not only a scheduling change -- read this before
+# comparing a run against a synchronous one.
 #
-#   FSDP state, full shard over 8 GPUs   ~72 GB/GPU
-#     params 9 + grads 9 + Adam m,v fp32 36 + fp32 master 18
-#   engine weights, per GPU              72 GB at TP=1  -> 144 GB total, OOM on a
-#                                        143 GB H200 before any KV cache
-#                                        18 GB at TP=4  -> fits
+#   ASYNC=1  Generation and training run *at the same time* on disjoint GPUs. The
+#            engines never sleep, so the rollout wall clock stops being dead GPU
+#            time -- which matters here because agentic rollouts dominate the step
+#            (8 turns of model call + sandbox exec, then a pytest suite). Costs:
+#            fewer GPUs for the policy, rollouts up to max_staleness_steps old, and
+#            a different loss (see POLICY_LOSS_TYPE below).
+#   ASYNC=0  One phase at a time on all 8 GPUs, engines sleeping while training.
+#            Strictly on-policy, and the configuration this kit measured at 4B.
 #
-# Hence ENGINES=2 TP=4 as the default rather than SkyRL's ENGINES=8 TP=1: a
-# mixture of experts is sized by its *total* parameters, not its active ones.
-# 35B-A3B activates 3B per token and still carries 72 GB of weights. ENGINES*TP
-# must equal POLICY_GPUS, which the check below enforces.
+# The loss is the part that surprises people. Async cannot recompute old logprobs
+# -- the policy that produced a rollout is already gone -- so the objective has to
+# be anchored on the *rollout* logprobs. SkyRL asserts this outright: `regular`,
+# `gspo`, `cispo` and friends are rejected for async, and its own async recipe uses
+# `rollout_is`. So an async run and a sync run differ in algorithm, not just in
+# schedule, and their reward curves are not directly comparable.
 #
-# If step 1 still OOMs, GPU_MEM_UTIL is the knob -- it caps the engine's KV pool
-# as a fraction of *total* GPU memory, and sleep/wake does not give that back
-# until the engine has already reserved it.
+# Sizing, **[computed, not measured]**, 35.95B params at bf16 on 143 GB H200s.
+# FSDP full-shard state is 16 bytes/param (params 2 + grads 2 + Adam m,v 8 + fp32
+# master 4):
+#
+#   policy GPUs   8 -> 71.9 GB each    5 -> 115.0 GB    <- 28 GB for activations
+#                 7 -> 82.2 GB         4 -> 143.8 GB    <- does not fit at all
+#                 6 -> 95.9 GB  (async default, 47 GB spare)
+#
+# That is why the async split is 6+2 rather than upstream's 4+4: a quarter of this
+# model's optimizer state does not fit on one H200. The two engine GPUs hold 72 GB
+# of weights each at TP=1, leaving ~57 GB of KV cache per replica at 0.9.
+#
+# Under ASYNC=0 the engines share the policy's cards instead, so 72 GB of FSDP plus
+# 72 GB of engine weights at TP=1 would be 144 GB on a 143 GB card -- hence
+# ENGINES=2 TP=4 (18 GB/GPU) and GPU_MEM_UTIL 0.6 there. A mixture of experts is
+# sized by its *total* parameters, not its active ones: 35B-A3B activates 3B per
+# token and still carries 72 GB.
 #
 # Structured after SkyRL's own 8-GPU recipe
 # (examples/train_integrations/harbor/run_codecontest.sh).
@@ -54,10 +71,8 @@
 #
 # What did NOT change, and is the part most likely to bite:
 #
-#   colocate_all stays true           Even at 8 GPUs SkyRL's own large recipe
-#                                     keeps it: sleeping the engine while
-#                                     training is worth more than the swap cost,
-#                                     and it is what will let a 30B policy fit.
+#   colocate_all                      now follows ASYNC: false when async (the
+#                                     trainer asserts it), true when not.
 #   remove_microbatch_padding=false   Qwen3.5 is Qwen3_5ForConditionalGeneration,
 #                                     a VLM shell over hybrid linear/full
 #                                     attention. FSDP's microbatch packing path
@@ -124,16 +139,59 @@ N_SAMPLES="${N_SAMPLES:-8}"
 BATCH="${BATCH:-32}"
 CONCURRENCY="${CONCURRENCY:-128}"
 TRAJ_PER_SEC="${TRAJ_PER_SEC:-5}"
-# 0.8 was right when the engine held a 4B; at 72 GB of weights the engine and the
-# FSDP shards are competing for the same card. See the sizing note in the header.
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.6}"
-POLICY_GPUS="${POLICY_GPUS:-8}"
-ENGINES="${ENGINES:-2}"
-TP="${TP:-4}"
 MICRO_TRAIN="${MICRO_TRAIN:-1}"
 MICRO_FORWARD="${MICRO_FORWARD:-1}"
 USE_KL_LOSS="${USE_KL_LOSS:-false}"
 LOGGER="${LOGGER:-wandb}"
+TOTAL_GPUS="${TOTAL_GPUS:-8}"
+
+# ASYNC=1 overlaps rollout generation with training on disjoint GPUs; ASYNC=0 is the
+# colocated, strictly-sequential loop. This is not a throughput knob with everything
+# else held equal -- see the block below -- so it is an explicit choice.
+ASYNC="${ASYNC:-1}"
+
+if [ "$ASYNC" = "1" ]; then
+  # Fully async. Generation and training run at the same time on separate GPUs, so
+  # the engines never sleep and the rollout wall clock stops being dead GPU time.
+  #
+  # Why the split is 6+2 and not 4+4. FSDP full-shard state is 16 bytes/param
+  # (params bf16 2 + grads bf16 2 + Adam m,v fp32 8 + fp32 master 4), so for 35.95B:
+  #
+  #   8 policy GPUs   71.9 GB each      4 policy GPUs  143.8 GB each -> does not fit
+  #   7 policy GPUs   82.2 GB each      5 policy GPUs  115.0 GB each -> 28 GB spare
+  #   6 policy GPUs   95.9 GB each  <-  47 GB spare for activations
+  #
+  # A 143 GB H200 cannot hold a quarter of this model's optimizer state, which is
+  # what upstream's own async recipe assumes (NUM_POLICY_GPUS=4 for a smaller
+  # policy). So the policy takes 6 and the engines take 2 -- 72 GB of weights on
+  # each at TP=1, leaving ~57 GB of KV cache per replica at 0.9 utilisation.
+  #
+  # **[computed, not measured]** like the rest of this model's sizing.
+  POLICY_GPUS="${POLICY_GPUS:-6}"
+  ENGINES="${ENGINES:-2}"
+  TP="${TP:-1}"
+  # The engines have the card to themselves now, so there is nothing to leave room
+  # for. This is upstream's async value.
+  GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.9}"
+  MAX_STALENESS="${MAX_STALENESS:-4}"
+  # mini_batch <= workers <= mini_batch * (staleness + 1), asserted by the trainer.
+  GEN_WORKERS="${GEN_WORKERS:-$((BATCH * 2))}"
+  # Async cannot recompute old logprobs -- the policy that produced a rollout is
+  # already gone -- so the loss has to optimize against the *rollout* logprobs.
+  # `regular` (the sync default) is rejected outright; upstream's async recipe uses
+  # rollout importance sampling. This changes the algorithm, not just the schedule.
+  POLICY_LOSS_TYPE="${POLICY_LOSS_TYPE:-rollout_is}"
+  ENTRYPOINT="examples.train_integrations.harbor.entrypoints.main_harbor_fully_async"
+else
+  # Colocated and synchronous: engines share the policy's GPUs and sleep during
+  # training, so GPU_MEM_UTIL has to leave room for the FSDP shards.
+  POLICY_GPUS="${POLICY_GPUS:-$TOTAL_GPUS}"
+  ENGINES="${ENGINES:-2}"
+  TP="${TP:-4}"
+  GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.6}"
+  POLICY_LOSS_TYPE="${POLICY_LOSS_TYPE:-regular}"
+  ENTRYPOINT="examples.train_integrations.harbor.entrypoints.main_harbor"
+fi
 
 # The two Qwen3.5 flags, both taken from SkyRL's own
 # examples/train/models/run_qwen3.5_0.8b.sh rather than guessed:
@@ -164,7 +222,30 @@ LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-true}"
 # With colocate_all the engines share the policy's GPUs, so the engine grid has
 # to land exactly on them. Catch it here instead of in a Ray placement-group
 # timeout that never resolves.
-if [ "$((ENGINES * TP))" -ne "$POLICY_GPUS" ]; then
+if [ "$ASYNC" = "1" ]; then
+  # Disjoint sets: the policy and the engines each need their own cards, and
+  # together they must not exceed the box.
+  if [ "$((POLICY_GPUS + ENGINES * TP))" -ne "$TOTAL_GPUS" ]; then
+    echo "async placement must use every GPU exactly once:" >&2
+    echo "  POLICY_GPUS ($POLICY_GPUS) + ENGINES*TP ($ENGINES*$TP) != TOTAL_GPUS ($TOTAL_GPUS)" >&2
+    exit 1
+  fi
+  # 16 bytes/param of FSDP state, against ~143 GB of H200. Refuse rather than OOM
+  # after a step of rollouts has been paid for.
+  fsdp_gb=$(python3 -c "print(round(16 * 35.95e9 / $POLICY_GPUS / 1e9))" 2>/dev/null || echo 0)
+  if [ "$fsdp_gb" -gt 130 ]; then
+    echo "POLICY_GPUS=$POLICY_GPUS puts ~${fsdp_gb} GB of FSDP state on each card," >&2
+    echo "which leaves nothing for activations on a 143 GB GPU. Use 6 or more." >&2
+    exit 1
+  fi
+  if [ "$BATCH" -gt "$GEN_WORKERS" ] \
+     || [ "$GEN_WORKERS" -gt "$((BATCH * (MAX_STALENESS + 1)))" ]; then
+    echo "the trainer asserts BATCH <= GEN_WORKERS <= BATCH*(MAX_STALENESS+1):" >&2
+    echo "  BATCH=$BATCH GEN_WORKERS=$GEN_WORKERS MAX_STALENESS=$MAX_STALENESS" >&2
+    exit 1
+  fi
+elif [ "$((ENGINES * TP))" -ne "$POLICY_GPUS" ]; then
+  # Colocated: the engine grid has to land exactly on the policy's GPUs.
   echo "ENGINES*TP ($ENGINES*$TP) must equal POLICY_GPUS ($POLICY_GPUS)" >&2
   exit 1
 fi
@@ -247,10 +328,28 @@ n_eval=$(find "$RL_EVAL_DATA/" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) 
 echo "run=$RUN_NAME model=$MODEL"
 echo "train=$RL_TRAIN_DATA ($n_train tasks)  eval=$RL_EVAL_DATA ($n_eval tasks)"
 echo "steps=$MAX_STEPS"
-echo "rollouts/step=$((BATCH * N_SAMPLES)) concurrency=$CONCURRENCY gpus=$POLICY_GPUS engines=${ENGINES}xTP${TP}"
+echo "rollouts/step=$((BATCH * N_SAMPLES)) concurrency=$CONCURRENCY"
+if [ "$ASYNC" = "1" ]; then
+  echo "async: policy on $POLICY_GPUS GPU(s), ${ENGINES} engine(s) x TP${TP} on $((ENGINES * TP))," \
+       "staleness<=$MAX_STALENESS, gen_workers=$GEN_WORKERS, loss=$POLICY_LOSS_TYPE"
+  async_flags=(
+    trainer.fully_async.enabled=true
+    trainer.fully_async.max_staleness_steps="$MAX_STALENESS"
+    trainer.fully_async.num_parallel_generation_workers="$GEN_WORKERS"
+    # Weight sync does not invalidate the KV cache: the tokens already generated
+    # stay valid, and re-prefilling every in-flight rollout on every step is what
+    # async is trying to avoid.
+    trainer.fully_async.clear_kv_cache_on_weight_sync=false
+    trainer.placement.colocate_all=false
+  )
+else
+  echo "sync: colocated on $POLICY_GPUS GPU(s), engines=${ENGINES}xTP${TP}, loss=$POLICY_LOSS_TYPE"
+  async_flags=(trainer.placement.colocate_all=true)
+fi
 
 cd "$SKYRL_DIR"
-exec uv run --extra fsdp --extra harbor -m examples.train_integrations.harbor.entrypoints.main_harbor \
+exec uv run --extra fsdp --extra harbor -m "$ENTRYPOINT" \
+  "${async_flags[@]}" \
   data.train_data="['$RL_TRAIN_DATA']" \
   data.val_data="['$RL_EVAL_DATA']" \
   harbor_trial_config.trials_dir="$OUT/trials" \
@@ -258,7 +357,6 @@ exec uv run --extra fsdp --extra harbor -m examples.train_integrations.harbor.en
   harbor_trial_config.agent.kwargs.model_info.max_input_tokens="$MAX_MODEL_LEN" \
   trainer.policy.model.path="$MODEL" \
   trainer.strategy=fsdp \
-  trainer.placement.colocate_all=true \
   trainer.placement.policy_num_nodes=1 \
   trainer.placement.policy_num_gpus_per_node="$POLICY_GPUS" \
   trainer.placement.ref_num_nodes=1 \
@@ -276,6 +374,7 @@ exec uv run --extra fsdp --extra harbor -m examples.train_integrations.harbor.en
   trainer.micro_train_batch_size_per_gpu="$MICRO_TRAIN" \
   trainer.update_epochs_per_batch=1 \
   trainer.algorithm.advantage_estimator=grpo \
+  trainer.algorithm.policy_loss_type="$POLICY_LOSS_TYPE" \
   trainer.algorithm.use_kl_loss="$USE_KL_LOSS" \
   trainer.algorithm.loss_reduction=token_mean \
   trainer.algorithm.grpo_norm_by_std=false \
