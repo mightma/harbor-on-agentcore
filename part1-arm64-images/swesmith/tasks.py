@@ -133,6 +133,36 @@ def local_arm64_images() -> set[str]:
     return {line.strip() for line in out.stdout.splitlines() if "swesmith.arm64." in line}
 
 
+def resolve_repo_keys(wanted: set[str], registry_keys) -> tuple[set[str], list[str]]:
+    r"""Accept a profile key in either spelling, and say which ones resolve.
+
+    The same repository has two names in this pipeline and they are not
+    interchangeable:
+
+        registry     Instagram__MonkeyType.70c3acf6     case preserved, `__`
+        image tag    instagram_1776_monkeytype.70c3acf6 lowercased, `_1776_`
+
+    prepared.json records the second, because that is what it reads back off the
+    built image; the profile registry only answers to the first. Requiring callers
+    to know which one they are holding is how `--repos` from prepared.json failed
+    with "unknown profile keys" for all 124 repositories -- **\[measured\]** a
+    plain `_1776_` -> `__` substitution still missed 9 of them, the ones whose
+    repository name has capitals.
+    """
+    registry_keys = list(registry_keys)
+    index = {key.lower().replace("__", "_1776_"): key for key in registry_keys}
+    known = set(registry_keys)
+    resolved, unknown = set(), []
+    for key in wanted:
+        if key in known:
+            resolved.add(key)
+        elif key.lower().replace("__", "_1776_") in index:
+            resolved.add(index[key.lower().replace("__", "_1776_")])
+        else:
+            unknown.append(key)
+    return resolved, sorted(unknown)
+
+
 def share_swesmith_tasks(output_dir: Path, prepared: dict[str, str]) -> ShareResult:
     """The SWE-smith adapter over ``share_tasks()``: one image per repository.
 
@@ -214,10 +244,15 @@ def main() -> None:
     from swesmith.profiles import registry
 
     if args.repos:
-        wanted = {key.strip() for key in args.repos.split(",") if key.strip()}
-        unknown = wanted - set(registry.keys())
+        asked = {key.strip() for key in args.repos.split(",") if key.strip()}
+        wanted, unknown = resolve_repo_keys(asked, registry.keys())
         if unknown:
-            raise SystemExit(f"unknown profile keys: {sorted(unknown)}")
+            raise SystemExit(
+                f"unknown profile keys: {unknown[:5]}"
+                + (f" (+{len(unknown) - 5} more)" if len(unknown) > 5 else "")
+                + "\nkeys are accepted in either spelling -- the registry's "
+                "(Owner__repo.commit8) or an image tag's (owner_1776_repo.commit8)"
+            )
     else:
         wanted = None
 
