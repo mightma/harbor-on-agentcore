@@ -59,7 +59,32 @@ mkdir -p "$SWESMITH_BUILD_ROOT"
 
 # Stage 1: recreate each repo's conda env on arm64 from the published amd64 image
 # and commit it as swesmith.arm64.<repo>.
+#
+# build_images.py exits non-zero when *any* repo fails, and some always do -- a
+# handful of repositories have dependencies with no aarch64 build at all (see "The 15
+# build failures" in the part 1 README). Under `set -e` that ended the script here,
+# so stage 2 never ran and the build produced 124 repo images that nothing wrapped.
+# **\[measured\]** exactly that: 120 ok + 4 cached, 10 failed, and a prepared.json
+# still holding only the 4 from an earlier pilot.
+#
+# So a partial failure is carried, not fatal: stage 2 wraps whatever stage 1 built,
+# and the non-zero status resurfaces at the end. Nothing built at all *is* fatal --
+# there is nothing to wrap and continuing would only hide the reason.
+set +e
 "$PART/.venv/bin/python" -u "$HERE/build_images.py" "$@"
+build_rc=$?
+set -e
+
+if [ "$build_rc" -ne 0 ]; then
+  built=$(docker image ls --format '{{.Repository}}' |
+            grep -c 'swesmith\.arm64\.' || true)
+  if [ "${built:-0}" -eq 0 ]; then
+    echo "stage 1 failed and built nothing; see $SWESMITH_BUILD_ROOT/summary.json" >&2
+    exit "$build_rc"
+  fi
+  echo "stage 1 reported failures (rc=$build_rc) but built $built image(s);" >&2
+  echo "continuing to stage 2 with those. Causes are in summary.json." >&2
+fi
 
 # Stage 2: bake in git, uv, /logs and every task branch (`git fetch --all`), so a
 # task's only per-task work is a local `git checkout`. This is what lets one image
@@ -87,5 +112,10 @@ if [ "$rc" -eq 0 ] && [ -n "${KIT_STATE_DIR:-}" ]; then
   mkdir -p "$KIT_STATE_DIR"
   cp "$SWESMITH_BUILD_ROOT/prepared.json" "$KIT_STATE_DIR/prepared.json"
   echo "manifest copied to $KIT_STATE_DIR/prepared.json"
+fi
+# Surface whichever stage complained, stage 1 included -- it was only deferred.
+if [ "$rc" -eq 0 ] && [ "$build_rc" -ne 0 ]; then
+  echo "note: stage 2 succeeded; stage 1 had failures (rc=$build_rc)" >&2
+  rc=$build_rc
 fi
 exit "$rc"
