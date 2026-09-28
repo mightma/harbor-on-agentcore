@@ -250,6 +250,28 @@ elif [ "$((ENGINES * TP))" -ne "$POLICY_GPUS" ]; then
   exit 1
 fi
 
+# The AgentCore environment needs an execution role, and part 4 is the one place an
+# environment variable is not enough. Every other script in this kit exports
+# HARBOR_AGENTCORE_ROLE_ARN and that works, because they run Harbor in their own
+# process. Here the trials run inside Ray workers, and Ray only forwards the env vars
+# in its runtime_env -- SkyRL puts NCCL/VLLM/HF/WANDB there, plus anything named
+# SKYRL_*, and nothing else. So the role has to travel in the *trial config*, which is
+# serialised into the worker; `harbor_trial_config.environment.kwargs.execution_role_arn`
+# below is that route. The export is kept for the driver's own calls.
+#
+# Getting this wrong is silent in the worst way. Every trial raises before creating a
+# sandbox, so the trial directory holds a 0-byte trial.log, no result.json and an empty
+# agent/ -- while the training loop completes steps, writes checkpoints, and reports a
+# reward of 0 for everything. **[measured]** 1152 trials, 0 completed, 5 checkpoints
+# saved. `scripts/check_run.sh` is the 10-second way to see it.
+if [ -z "${ACR_EXECUTION_ROLE_ARN:-}" ]; then
+  echo "ACR_EXECUTION_ROLE_ARN is unset -- set it in config.env." >&2
+  echo "Without it every rollout fails before creating a sandbox and every reward is 0," >&2
+  echo "while the training loop happily reports steps." >&2
+  exit 1
+fi
+export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
+
 if [ "$LOGGER" = "wandb" ] && [ -z "${WANDB_API_KEY:-}" ]; then
   echo "LOGGER=wandb but WANDB_API_KEY is unset (set it in config.env)" >&2
   exit 1
@@ -353,6 +375,7 @@ exec uv run --extra fsdp --extra harbor -m "$ENTRYPOINT" \
   data.train_data="['$RL_TRAIN_DATA']" \
   data.val_data="['$RL_EVAL_DATA']" \
   harbor_trial_config.trials_dir="$OUT/trials" \
+  harbor_trial_config.environment.kwargs.execution_role_arn="$ACR_EXECUTION_ROLE_ARN" \
   harbor_trial_config.agent.kwargs.max_turns="$MAX_TURNS" \
   harbor_trial_config.agent.kwargs.model_info.max_input_tokens="$MAX_MODEL_LEN" \
   trainer.policy.model.path="$MODEL" \
