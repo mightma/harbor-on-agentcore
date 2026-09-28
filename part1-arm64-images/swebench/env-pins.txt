@@ -1,0 +1,34 @@
+# pip constraints added on top of an instance image before it is pushed.
+#
+#   instance:<instance_id>=requirement[,requirement]     applies to that instance
+#   <repo>=requirement[,requirement]                     applies to every instance of it
+#
+# Every line here is a *measured* fix: an instance whose oracle gated 0.000 on
+# dependency drift, diagnosed, pinned, and re-gated to 1.000. Nothing belongs in
+# this file that has not completed that loop -- a guessed pin is worse than a
+# failing gate, because a guess is invisible while a failing gate is not.
+#
+# Prefer the instance form. **\[measured\]** all 44 sphinx instances in Verified
+# share one env image, because the env stage only creates the conda environment and
+# the repo install happens per instance -- so a repo-keyed pin reaches every version
+# of that repo, including the 4 self-built sphinx instances that gate 1.000 without
+# it. The pin is applied to the instance image for that reason; see
+# apply_instance_pin(). A repo key is right only when you have gated every version.
+#
+# To reproduce what an unpinned build produces: --no-pins-file
+
+# Sphinx 3.x resolves docutils 0.23 against a requirements file that leaves it
+# unpinned; docutils dropped `utils.roman` in 0.18, so every test errors with
+# `ModuleNotFoundError: No module named 'roman'`. Pinning turned 0 passing into 14
+# (2 FAIL_TO_PASS + 12 PASS_TO_PASS) on sphinx-7985 and gated all six to 1.000.
+# This is temporal drift, not architecture -- it would happen the same on amd64,
+# which is why the published images work and a fresh build does not.
+#
+# These six and no others: sphinx-9229, sphinx-9673, sphinx-10449 and sphinx-10673
+# are also self-built, and they gate 1.000 with a current docutils.
+instance:sphinx-doc__sphinx-7748=docutils<0.17
+instance:sphinx-doc__sphinx-7757=docutils<0.17
+instance:sphinx-doc__sphinx-7985=docutils<0.17
+instance:sphinx-doc__sphinx-8056=docutils<0.17
+instance:sphinx-doc__sphinx-8459=docutils<0.17
+instance:sphinx-doc__sphinx-8595=docutils<0.17

@@ -327,30 +327,47 @@ clock instead of the day-plus this would have been under emulation. Result:
 
 | | |
 |---|---|
-| Self-built images now in ECR | **160** |
-| SWE-bench Verified runnable on arm64 | **441 / 500 (88%)** = 281 published + 160 built |
-| Of the 219 unpublished | 160 built, **59 not** — every one for a reason below |
+| Self-built images now in ECR | **157** |
+| SWE-bench Verified runnable on arm64 | **438 / 500 (87.6%)** = 281 published + 157 built |
+| Of the 219 unpublished | 157 built, **62 not** — every one for a reason below |
 
-`swebench/data/swebv-arm64-selfbuilt.txt` is the list of 160, read back from ECR.
+`swebench/data/swebv-arm64-selfbuilt.txt` is the list of 157, read back from ECR.
 
 #### Then the gate, which is what says they are usable
 
-**\[measured\]** the oracle gate over all 160, 19 min at concurrency 8:
+**\[measured\]** the oracle gate over all 157:
 
 | | |
 |---|---|
-| **Gate-clean (reward 1.0)** | **130** — `swebench/data/swebv-arm64-selfbuilt-gated.txt` |
-| reward 0.0 | 3 (pylint; undiagnosed, oracle applies and 20/21 FAIL_TO_PASS pass) |
+| **Gate-clean (reward 1.0)** | **121** — `swebench/data/swebv-arm64-selfbuilt-gated.txt` |
+| reward 0.0 | 9 — 3 pylint (diagnosed below) and 6 sphinx (the pin, below) |
 | **could not deploy at all** | **27 (matplotlib)** — see the ceiling below |
 
-Two operational lessons came out of that run:
+Three operational lessons came out of those runs:
 
 - **A cold runtime's first invoke can time out.** One django trial died with
   `RuntimeClientError: Runtime initialization time exceeded`; the identical trial re-run
   scored 1.000. Retry before investigating.
 - **The docutils pin generalises.** All six sphinx instances that gated 0.000 were fixed by
-  `--pin 'sphinx-doc/sphinx=docutils<0.17'` and re-gated **1.000** — 1 verified earlier,
-  5 in a batch here.
+  `docutils<0.17` and re-gated **1.000** — 1 verified earlier, 5 in a batch.
+- **A fix that lives in a flag does not survive the rebuild that needs it.** Those six
+  sphinx instances gated 0.000 again on the from-scratch rebuild, because the documented
+  build command does not carry `--pin`. The gate caught it — 9 instances at reward 0.0
+  where the earlier run had 3 — but only for a reader who knew 3 was the number to
+  expect. Pins now live in `swebench/env-pins.txt` and are applied by default, so the
+  next rebuild inherits them; `--no-pins-file` reproduces an unpinned build.
+
+That file is deliberately **not** under `data/`, which holds only what a command
+regenerates. It is the opposite: findings no command can rediscover without a gate run
+to read.
+
+Pins land on the **instance** image, not the env image, and the difference is
+load-bearing: **\[measured\]** all 44 sphinx instances in Verified share one env image
+(`sweb.env.py.arm64.764c2112…`), because the env stage only creates the conda
+environment and the repo install happens per instance. An env-level `docutils<0.17`
+would therefore also hit the 4 self-built sphinx instances that gate 1.000 with a
+current docutils. Nothing is built on top of an instance image and the eval script does
+not reinstall dependencies, so that layer applies to exactly what was measured.
 
 #### The 2048 MB image ceiling is real, and matplotlib does not fit
 
@@ -502,11 +519,11 @@ numbers are quoted against:
 
 | File | What it lists | Measured here |
 |---|---|---|
-| **`swebv-arm64-runnable.txt`** | has an arm64 image ACR can deploy — the benchmark | **414 / 500** |
-| **`swebv-arm64-gated.txt`** | of those, oracle ceiling verified 1.0. **Report from this one** | **200** |
+| **`swebv-arm64-runnable.txt`** | has an arm64 image ACR can deploy — the benchmark | **411 / 500** |
+| **`swebv-arm64-gated.txt`** | of those, oracle ceiling verified 1.0. **Report from this one** | **397** |
 | `swebv-arm64-instances.txt` | has a *published* image | 281 |
-| `swebv-arm64-selfbuilt.txt` | built here and pushed | 160 |
-| `swebv-arm64-selfbuilt-gated.txt` | `gated` ∩ `selfbuilt` — the set the 44.6% Sonnet 5 number is on | 130 |
+| `swebv-arm64-selfbuilt.txt` | built here and pushed | 157 |
+| `swebv-arm64-selfbuilt-gated.txt` | `gated` ∩ `selfbuilt` | 121 |
 | `swebv-arm64-undeployable.txt` | built, then refused as over 2048 MB | 27 |
 
 The list to generate from is `swebv-arm64-runnable.txt`, and it does not exist until the
@@ -533,16 +550,17 @@ comm -12 <(sort swebench/data/swebv-arm64-gated.txt) \
          <(sort swebench/data/swebv-arm64-instances.txt) > /tmp/old-70.txt
 ```
 
-Why the test set is 414 and not 500: 86 instances have no arm64 image that can run
-here — 59 that cannot be built at all (see below) and 27 built but too large for ACR.
-Say **"SWE-bench Verified, 414 of 500 arm64-runnable"** when you quote a number, and
+Why the test set is 411 and not 500: 89 instances have no arm64 image that can run
+here — 62 that cannot be built at all (see below) and 27 built but too large for ACR.
+Say **"SWE-bench Verified, 411 of 500 arm64-runnable"** when you quote a number, and
 say which of the two lists you used. What you must *not* do is call any subset of this
 "SWE-bench Verified" without qualification.
 
-Of the 414, **200 have a verified oracle ceiling** so far (70 published + 130
-self-built). The rest are runnable but ungated: an instance whose own golden patch does
-not score 1.0 cannot reward a correct answer, and scoring a policy against it only
-subtracts a constant. Gate them (part 2) before adding them to a reported number.
+Of those, **397 have a verified oracle ceiling** — the whole runnable set has now been
+through the gate (part 2), so the ungated caveat that used to live here is retired. The
+14 it excludes are runnable but cannot reward a correct answer: an instance whose own
+golden patch does not score 1.0 only subtracts a constant from any policy scored against
+it. Gate anything you add to this set before adding it to a reported number.
 
 ### Pull the bases before you evaluate
 

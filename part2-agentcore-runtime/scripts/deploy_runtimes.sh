@@ -40,7 +40,7 @@ export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
 #   SWE-smith   task.toml sets [environment].docker_image and environment/ is
 #               empty. Every task of a repository names the same image, so they
 #               share one runtime and one representative task gates all of them.
-#               119 trials cover 44,489 tasks.
+#               122 trials cover 45,844 tasks.
 #
 #   SWE-bench   each task has its own environment/Dockerfile and no
 #               docker_image. Every task is its own environment, so there is

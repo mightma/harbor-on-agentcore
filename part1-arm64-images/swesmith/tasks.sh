@@ -8,8 +8,8 @@
 # $HARBOR_DATASETS/swesmith-arm64 (disposable -- this regenerates it in ~10
 # minutes, so never treat the task dirs as an artifact worth protecting).
 #
-# --shared-images is what makes 44,489 tasks resolve to 119 runtimes instead of
-# 44,489: it deletes each task's environment/Dockerfile so the environment
+# --shared-images is what makes 45,844 tasks resolve to 122 runtimes instead of
+# 45,844: it deletes each task's environment/Dockerfile so the environment
 # content hash falls back to sha256(docker_image), and moves the per-task
 # `git checkout` into task.toml's [environment.healthcheck], which is not part of
 # the hash. Pair it with `--ek share_by_content=true` in parts 2-4.

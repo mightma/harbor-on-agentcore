@@ -50,15 +50,15 @@ there are 85 of them, two of which this kit installs as packages. Part 1 is abou
 images those generated tasks point at, which is where arm64 bites.)
 
 - **SWE-bench Verified is the test set, whole and unsplit.** 281 of its 500 instances
-  have published arm64 images; part 1 builds the rest (**\[measured\]** 160 built, 130
-  gate-clean), which makes the runnable test set **414 of 500**. Quote it as "SWE-bench
-  Verified, 414 of 500 arm64-runnable", and say whether you used the 414 or the 200 whose
-  oracle ceiling is verified. An earlier version of this kit split Verified into 208 train
-  / 73 eval because only 281 instances could run at all; building the missing images
-  retired that compromise.
-- **SWE-smith** has no arm64 images at all, so part 1 builds them: 119 repository
-  images under qemu, ~2.5 h at concurrency 12. That is the price of a training set
-  that is disjoint from the eval benchmark.
+  have published arm64 images; part 1 builds the rest (**\[measured\]** 157 built, 121
+  gate-clean), which makes the runnable test set **411 of 500** and the gate-clean set
+  **397**. Quote it as "SWE-bench Verified, 411 of 500 arm64-runnable", and say whether
+  you used the 411 or the 397 whose oracle ceiling is verified. An earlier version of
+  this kit split Verified into 208 train / 73 eval because only 281 instances could run
+  at all; building the missing images retired that compromise.
+- **SWE-smith** has no arm64 images at all, so part 1 builds them: 124 repository
+  images of 134 attempted. That is the price of a training set that is disjoint from
+  the eval benchmark.
 
 Other hard service limits, all of them design constraints rather than bugs:
 
@@ -97,8 +97,8 @@ looked broken:
 - **`share_by_content`.** Harbor keys a runtime on
   `environment_content_hash(environment_dir, docker_image)`. The upstream SWE-smith
   adapter writes the per-task `git checkout` into the task's own Dockerfile, so all
-  44,489 tasks hash differently and each would deploy its own runtime. This flag keys
-  purely on content, collapsing them to **119 runtimes**. Without it you hit the
+  45,844 tasks hash differently and each would deploy its own runtime. This flag keys
+  purely on content, collapsing them to **122 runtimes**. Without it you hit the
   1,000-runtime quota almost immediately.
 - **`OPENBLAS_CORETYPE`.** `import numpy` SIGILLs inside an ACR session on some
   builds, so every reward was 0 while the training loop happily reported steps. A
@@ -140,12 +140,12 @@ cannot build images at all. Anything not marked is a projection. In particular:
 | Claim | Status |
 |---|---|
 | SWE-bench Verified arm64 eval, Qwen3.5-**4B**, 7/70 = 10.0% | **\[measured\]** |
-| SWE-smith 44,489 tasks → 119 runtimes | **\[measured\]** |
-| SWE-smith oracle gate: 108 / 119 repos clean | **\[measured\]** |
+| SWE-smith 45,844 tasks → 122 runtimes | **\[measured\]** |
+| SWE-smith oracle gate: 110 / 122 repos clean | **\[measured\]** |
 | Warm session start 3 s median; hot session open 0.4 s | **\[measured\]** |
 | GRPO on 8× H100 with ACR rollouts, non-zero gradient path | **\[measured\]**, 4B |
 | Recording proxy: vLLM returns token ids + logprobs, turns stitched, attached to `result.json` | **\[measured\]** on the replacement host (1× L40S, vLLM 0.28) — part 5 |
-| Self-built arm64 SWE-bench images: **160 built, 130 gate-clean**; 27 exceed ACR's 2048 MB image ceiling and cannot be deployed at all | **\[measured\]** — part 1 |
+| Self-built arm64 SWE-bench images: **157 built, 121 gate-clean**; 27 exceed ACR's 2048 MB image ceiling and cannot be deployed at all | **\[measured\]** — part 1 |
 | **Claude Sonnet 5 on all 397 gate-clean instances: 186/397 = 46.9%**, $28.03, 0 errors | **\[measured\]** — part 3 |
 | The same 397 on **local docker** instead of AgentCore: 183/397 = 46.1%, trial time within **0.06%** | **\[measured\]** — per-trial speed is identical; only the concurrency ceiling differs |
 | Two runs of the same 397 tasks disagree on **55 of them** at `temperature: 0` | **\[measured\]** — ±1.8 pt of noise, so deltas under ~4 points are unresolvable in one run |
@@ -300,10 +300,10 @@ epoch. Budget against the 1,000/account default:
 
 | Dataset | Runtimes |
 |---|---|
-| SWE-smith, all 119 repos | 119 |
-| SWE-smith, 108 oracle-clean repos | 108 |
+| SWE-smith, all 122 referenced repos | 122 |
+| SWE-smith, 110 oracle-clean repos | 110 |
 | SWE-bench Verified arm64, 73 eval | 73 |
-| SWE-bench Verified arm64, the 414-instance test set | 414 |
+| SWE-bench Verified arm64, the 411-instance test set | 411 |
 
 Runtimes cost nothing idle but they do consume quota, and they accumulate: leftovers
 from earlier runs are easy to forget. `part2-agentcore-runtime/scripts/cleanup_runtimes.py --delete`

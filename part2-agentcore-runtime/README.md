@@ -74,7 +74,8 @@ scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swesmith-arm64" 20
 scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swebv-arm64" 16
 ```
 
-**\[measured\]** 119 runtimes in **19 minutes** at `-n 20`.
+**\[measured\]** 122 runtimes in **8.8 minutes** at `-n 20` on an arm64 builder (119 in
+19 minutes on the x86 host).
 
 This runs Harbor's `oracle` agent over one task per image, which does three things in
 one pass:
@@ -108,7 +109,7 @@ reads `agent/oracle.txt` instead and splits them by cause. **\[measured\]** on t
 SWE-smith gate:
 
 ```
-instances     : 119
+instances     : 119          <- the first SWE-smith gate, before the patch fix
 reward 1.0    : 91
 not 1.0       : 28
 
@@ -120,7 +121,28 @@ failures by cause:
 ```
 
 That split is the difference between "27 dead repositories" and "one tooling bug plus
-11 real unknowns". After fixing the patch bug and re-gating only the failures:
+11 real unknowns" — and it was right. Once the truncation was fixed upstream of the
+gate, a clean run over a rebuilt image set produced no truncated patches at all:
+
+```
+instances     : 122
+reward 1.0    : 110         <- 39,686 of 45,844 tasks
+not 1.0       : 12
+
+failures by cause:
+     9  patch applied cleanly, tests still failed
+     3  patch target missing from the tree
+```
+
+**\[measured\]** 122 runtimes and their gate in **8.8 minutes** at `-n 20`, against 19
+minutes for 119 on the x86 host: most of this step is building and pushing the wrapped
+image, which is native work on an arm64 builder. Stage medians: environment start 38 s
+(it includes `CreateAgentRuntime` and the wait for READY), agent setup 0 s (the oracle
+installs nothing), verifier 24 s.
+
+**Verify the patch path in part 1 and this second pass is unnecessary.** `bad hunks : 0`
+from `check_solve_patches.py` is the same claim the gate would spend 122 trials
+rediscovering. Keep the re-gate for the failures you actually mean to re-run:
 
 ```bash
 REPO_PREFIXES="$(paste -sd, failing-repos.txt)" JOB_NAME=regate \
@@ -131,9 +153,13 @@ uv run scripts/gate_report.py "$HARBOR_JOBS"/gate-* "$HARBOR_JOBS"/regate \
   --allowlist-out "$KIT_STATE_DIR"
 ```
 
-**\[measured\]** **108 of 119 clean, 38,815 of 44,489 tasks** — up from 91 / 34,908.
-Job dirs merge left to right, so the re-gate supersedes the original for anything it
+Job dirs merge left to right, so a re-gate supersedes the original for anything it
 re-ran. The allowlist it writes is what parts 3 and 4 restrict themselves to.
+
+The 12 that remain are all genuine, and the 3 in the second class are a *dataset* fault
+rather than a build one: SWE-smith's `combine_file` variants for pyquery, inflect and
+patsy patch files that do not exist at the commit their image is built from. Nothing
+about arm64 or about this kit will fix those; excluding them is the fix.
 
 ### Turn the gate into what parts 3 and 4 consume
 

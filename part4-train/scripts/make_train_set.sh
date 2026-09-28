@@ -5,7 +5,7 @@
 #   scripts/make_train_set.sh
 #   ALLOWLIST=/path/to/gate_passing_tasks.txt scripts/make_train_set.sh
 #
-# Symlinks rather than copies -- 38,815 task dirs, and the originals are already
+# Symlinks rather than copies -- 39,686 task dirs, and the originals are already
 # on local disk. Harbor reads task dirs, it does not write to them.
 #
 # Why restrict at all: an image whose oracle scores 0.0 cannot reward a correct

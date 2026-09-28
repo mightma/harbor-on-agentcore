@@ -83,6 +83,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ARM_ARCH = "arm64"
@@ -91,6 +92,10 @@ DATASET = "princeton-nlp/SWE-bench_Verified"
 
 HERE = Path(__file__).resolve().parent
 PUBLISHED_LIST = HERE / "data" / "swebv-arm64-instances.txt"
+# Beside the scripts and not under data/, because data/ holds only what a command
+# regenerates and this is the opposite: findings that no command can rediscover
+# without a gate run to read.
+PINS_FILE = HERE / "env-pins.txt"
 
 
 def _run(cmd: list[str], log_path: Path, timeout: int) -> tuple[int, str]:
@@ -238,21 +243,82 @@ def arm64_specs(ids: list[str]):
     return specs
 
 
-def parse_pins(values: list[str] | None) -> dict[str, list[str]]:
-    """``--pin 'sphinx-doc/sphinx=docutils<0.17'`` -> {repo: [requirement, ...]}."""
-    pins: dict[str, list[str]] = {}
+@dataclass
+class Pins:
+    """pip constraints to add to an env image, keyed either way round."""
+
+    by_repo: dict[str, list[str]] = field(default_factory=dict)
+    by_instance: dict[str, list[str]] = field(default_factory=dict)
+
+    def __bool__(self) -> bool:
+        return bool(self.by_repo or self.by_instance)
+
+    def merge(self, other: Pins) -> Pins:
+        for src, dst in ((other.by_repo, self.by_repo),
+                         (other.by_instance, self.by_instance)):
+            for key, reqs in src.items():
+                dst.setdefault(key, []).extend(reqs)
+        return self
+
+
+def parse_pins(values: list[str] | None, source: str = "--pin") -> Pins:
+    """``'sphinx-doc/sphinx=docutils<0.17'`` -> pins keyed by repo.
+
+    ``instance:<id>=<req>`` keys the same thing by instance id instead, which is
+    what the pin file uses -- see ``load_pin_file``.
+    """
+    pins = Pins({}, {})
     for raw in values or []:
         if "=" not in raw:
-            raise SystemExit(f"--pin wants repo=requirement[,requirement], got {raw!r}")
-        repo, specs = raw.split("=", 1)
-        pins.setdefault(repo.strip(), []).extend(
-            s.strip() for s in specs.split(",") if s.strip()
-        )
+            raise SystemExit(
+                f"{source} wants [instance:]KEY=requirement[,requirement], got {raw!r}"
+            )
+        key, requirements = raw.split("=", 1)
+        parsed = [s.strip() for s in requirements.split(",") if s.strip()]
+        key = key.strip()
+        if key.startswith("instance:"):
+            pins.by_instance.setdefault(key[len("instance:"):], []).extend(parsed)
+        else:
+            pins.by_repo.setdefault(key.removeprefix("repo:"), []).extend(parsed)
     return pins
 
 
-def apply_env_pins(specs, pins: dict[str, list[str]], build_root: Path) -> list[str]:
-    r"""Add a pip-constraint layer to the env images of pinned repos.
+def load_pin_file(path: Path) -> Pins:
+    """Read the durable pin list: one ``[instance:]KEY=req[,req]`` per line, ``#`` comments.
+
+    Why a file and not just the flag. `--pin` alone makes a *measured* finding live
+    in someone's shell history: the six sphinx instances below were diagnosed, pinned
+    and re-gated to 1.000, and then a from-scratch rebuild that followed the
+    documented command reproduced all six failures, because the documented command
+    does not carry the pin. The gate caught it (9 instances at reward 0.0 where the
+    previous run had 3), but only for a reader who knew 3 was the number to expect.
+
+    The docstring of ``apply_env_pins`` argues against a built-in pin *table*, and
+    that argument still holds: a pin guessed per repo would break the repo versions
+    that need the opposite pin. This file is the narrower thing -- entries keyed by
+    **instance id**, so each one touches only the env image it was verified against,
+    and sphinx 3's ``docutils<0.17`` cannot leak onto sphinx 5.
+    """
+    if not path.exists():
+        return Pins({}, {})
+    lines = [
+        line.split("#", 1)[0].strip()
+        for line in path.read_text().splitlines()
+    ]
+    return parse_pins([line for line in lines if line], source=str(path))
+
+
+def pins_for(spec, pins: Pins) -> list[str]:
+    """The requirements to add for one instance: its repo's pins, then its own."""
+    requirements = list(pins.by_repo.get(spec.repo, ()))
+    for req in pins.by_instance.get(spec.instance_id, ()):
+        if req not in requirements:
+            requirements.append(req)
+    return requirements
+
+
+def apply_instance_pin(image: str, reqs: list[str], build_root: Path) -> None:
+    r"""Add a pip-constraint layer on top of one *instance* image.
 
     Why this exists. **\[measured\]** six of ten self-built sphinx instances gated
     0.000 with every test erroring on ``ModuleNotFoundError: No module named
@@ -266,44 +332,39 @@ def apply_env_pins(specs, pins: dict[str, list[str]], build_root: Path) -> list[
     resolves versions the code never saw. It would happen identically on amd64 --
     which is why the published images work and a fresh build does not.
 
-    It is deliberately opt-in rather than a built-in pin table: the right pin
-    depends on the repo *version* (sphinx 5 wants a newer docutils than sphinx 3),
-    and a table that silently changed builds would be worse than a gate result you
-    have to read. The workflow is: build, gate, find the drift, pin, re-gate.
+    Why the *instance* layer and not the env layer, which is where this used to go.
+    **\[measured\]** all 44 sphinx instances in Verified -- and all 10 that are
+    self-built -- share a single env image (``sweb.env.py.arm64.764c2112...``): the
+    env stage creates a conda environment, and the repo install happens in the
+    instance stage. So an env-level pin is a pin on *every* instance of the repo,
+    including the 4 self-built sphinx instances that gate 1.000 without it and the
+    sphinx-5-era ones that need a newer docutils, not an older one. Keying the pin
+    file by instance id would have been a false promise at that layer. The instance
+    image is per instance, nothing is built on top of it, and the eval script does
+    not reinstall dependencies -- so this layer applies exactly to what was measured.
 
-    The pinned env image keeps its key, so the instance build that follows picks it
-    up with no further wiring.
+    Retagging ``image`` in place means the push, the task-facing alias and the size
+    report all see the pinned image with no further wiring.
     """
-    if not pins:
-        return []
-    patched: list[str] = []
-    by_env: dict[str, object] = {}
-    for spec in specs:
-        if spec.repo in pins:
-            by_env.setdefault(spec.env_image_key, spec)
-    for env_key, spec in by_env.items():
-        requirements = " ".join(f'"{r}"' for r in pins[spec.repo])
-        context = build_root / "pins" / env_key.replace(":", "__").replace("/", "_")
-        context.mkdir(parents=True, exist_ok=True)
-        (context / "Dockerfile").write_text(
-            f"FROM {env_key}\n"
-            "RUN . /opt/miniconda3/bin/activate && conda activate testbed && "
-            f"pip install --no-input {requirements}\n"
+    context = build_root / "pins" / image.replace(":", "__").replace("/", "_")
+    context.mkdir(parents=True, exist_ok=True)
+    requirements = " ".join(f'"{r}"' for r in reqs)
+    (context / "Dockerfile").write_text(
+        f"FROM {image}\n"
+        "RUN . /opt/miniconda3/bin/activate && conda activate testbed && "
+        f"pip install --no-input {requirements}\n"
+    )
+    code, note = _run(
+        ["docker", "build", "--platform", ARM_PLTF, "--provenance=false",
+         "-t", image, str(context)],
+        context / "build.log",
+        1800,
+    )
+    if code != 0:
+        raise RuntimeError(
+            f"pin layer failed ({note or 'rc=' + str(code)}); "
+            f"see {context / 'build.log'}"
         )
-        print(f"pinning {spec.repo} in {env_key}: {' '.join(pins[spec.repo])}")
-        code, note = _run(
-            ["docker", "build", "--platform", ARM_PLTF, "--provenance=false",
-             "-t", env_key, str(context)],
-            context / "build.log",
-            1800,
-        )
-        if code != 0:
-            raise SystemExit(
-                f"pin layer failed for {env_key} ({note or 'rc=' + str(code)}); "
-                f"see {context / 'build.log'}"
-            )
-        patched.append(env_key)
-    return patched
 
 
 def failed_env_keys(env_failed) -> set[str]:
@@ -427,6 +488,8 @@ def build_one(
     task_namespace: str | None = None,
     push_to: tuple[str, str] | None = None,
     prune: bool = False,
+    pin_reqs: list[str] | None = None,
+    build_root: Path | None = None,
 ) -> dict:
     from swebench.harness.docker_build import build_instance_image
 
@@ -434,6 +497,11 @@ def build_one(
     image = spec.instance_image_key
     try:
         build_instance_image(spec, client, None, False)
+        # On top of the instance image, never the shared env image; see
+        # apply_instance_pin(). Inside the try so a bad pin is reported as this
+        # instance failing rather than killing the batch.
+        if pin_reqs:
+            apply_instance_pin(image, pin_reqs, build_root or Path.cwd())
     except Exception as err:  # noqa: BLE001 - one bad instance must not stop the batch
         return {
             "instance_id": spec.instance_id,
@@ -588,11 +656,24 @@ def main() -> None:
         "--pin",
         action="append",
         default=None,
-        metavar="REPO=REQ[,REQ]",
-        help="Add pip constraints to a repo's env image before the instance build, "
-        "for instances whose oracle fails on dependency drift rather than on "
-        "anything architectural. Measured example: "
+        metavar="[instance:]KEY=REQ[,REQ]",
+        help="Add pip constraints to an env image before the instance build, for "
+        "instances whose oracle fails on dependency drift rather than on anything "
+        "architectural. Applied on top of the pin file. Measured example: "
         "--pin 'sphinx-doc/sphinx=docutils<0.17'. See apply_env_pins().",
+    )
+    parser.add_argument(
+        "--pins-file",
+        type=Path,
+        default=PINS_FILE,
+        help=f"Durable pins, one [instance:]KEY=REQ per line (default "
+        f"swebench/{PINS_FILE.name}). This is how a diagnosed dependency-drift fix "
+        "survives the next from-scratch rebuild.",
+    )
+    parser.add_argument(
+        "--no-pins-file",
+        action="store_true",
+        help="Ignore the pin file, to reproduce what an unpinned build produces.",
     )
     parser.add_argument(
         "--build-root",
@@ -690,7 +771,17 @@ def main() -> None:
         for key in sorted(dead):
             print(f"  dead env {key}")
 
-    apply_env_pins(specs, parse_pins(args.pin), Path.cwd())
+    pins = parse_pins(args.pin)
+    if not args.no_pins_file:
+        pins.merge(load_pin_file(args.pins_file))
+    pin_reqs = {s.instance_id: pins_for(s, pins) for s in specs}
+    pinned = {i: r for i, r in pin_reqs.items() if r}
+    if pinned:
+        print(f"{len(pinned)} instance(s) get a pip-constraint layer:")
+        for instance, reqs in sorted(pinned.items()):
+            print(f"  {instance:45} {' '.join(reqs)}")
+    elif pins:
+        print("pins are configured but match none of the instances being built")
 
     if args.prune_after_push and not args.push:
         raise SystemExit("--prune-after-push needs --push, or the image is just deleted")
@@ -714,6 +805,8 @@ def main() -> None:
                 args.task_namespace,
                 push_to,
                 args.prune_after_push,
+                pin_reqs.get(spec.instance_id),
+                args.build_root,
             )
             for spec in specs
         ]

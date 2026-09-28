@@ -35,7 +35,7 @@ Applied to the two datasets in the kit — both **\[measured\]**:
 
 | Dataset | Grouping | Groups | Per-task delta | Cost of the delta |
 |---|---|---|---|---|
-| SWE-smith | repository | **119** for 44,489 tasks | `git checkout <branch>` | local, ~0 s |
+| SWE-smith | repository | **122** for 45,844 tasks | `git checkout <branch>` | local, ~0 s |
 | SWE-bench Verified | `env_image_key` | **40** for 500 instances | clone + reset + history scrub + `pip install -e .[test]` | **minutes** |
 
 SWE-smith collapses so well because every task of a repository is a branch off the *same*

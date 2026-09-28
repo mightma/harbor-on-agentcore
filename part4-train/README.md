@@ -68,7 +68,7 @@ SkyRL touches Harbor through three imports (`TrialConfig`, `Trial.create/run`,
 An image whose oracle scores 0.0 cannot reward a correct patch, so every rollout on it
 is a guaranteed 0. That is not a hard task, it is a dead signal — and in GRPO a group of
 dead signals contributes no advantage while still costing a full rollout each.
-**\[measured\]** the gate excludes 11 of 119 images, keeping 38,815 of 44,489 tasks.
+**\[measured\]** the gate excludes 12 of 122 images, keeping 39,686 of 45,844 tasks.
 
 ## Verify in ascending cost — each step is an order of magnitude cheaper than the next
 

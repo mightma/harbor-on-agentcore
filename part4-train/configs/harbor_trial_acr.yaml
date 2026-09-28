@@ -72,8 +72,8 @@ environment:
   type: agentcore
   suppress_override_warnings: true
   kwargs:
-    # Tasks sharing an image share a runtime: 44,489 SWE-smith tasks resolve to
-    # 119 runtimes instead of 44,489. Without this the account's 1,000-runtime
+    # Tasks sharing an image share a runtime: 45,844 SWE-smith tasks resolve to
+    # 122 runtimes instead of 45,844. Without this the account's 1,000-runtime
     # quota is gone within one epoch.
     share_by_content: true
     # One runtime per task image, kept when the task's last
