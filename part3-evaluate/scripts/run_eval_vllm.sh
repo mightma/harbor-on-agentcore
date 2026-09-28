@@ -76,6 +76,18 @@ export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
 # incompatible" a few minutes later instead of now.
 export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
+# Same cause, a second path, and it only appears once TP > 1 -- because that is when
+# there is an allreduce to fuse at all:
+#
+#   flashinfer_comm.allreduce_fusion -> trtllm_mnnvl_allreduce -> JIT -> get_cuda_path
+#   RuntimeError: Could not find nvcc ...
+#
+# So TP=1 survives on the sampler flag alone and TP=4 does not, which is a confusing
+# way to learn that these are two independent FlashInfer entry points. Disabling this
+# falls back to vLLM's symmetric-memory or NCCL allreduce; what is lost is a fused
+# allreduce+RMSNorm kernel, i.e. throughput, not correctness.
+export VLLM_ALLREDUCE_USE_FLASHINFER="${VLLM_ALLREDUCE_USE_FLASHINFER:-0}"
+
 if [ ! -x "$VLLM" ]; then
   echo "no vllm at $VLLM -- run 'uv sync --extra serve' or set VLLM=<path>" >&2
   exit 1
