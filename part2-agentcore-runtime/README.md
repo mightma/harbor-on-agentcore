@@ -67,7 +67,7 @@ await sandbox.stop()
 ## Deploy the runtimes
 
 ```bash
-# SWE-smith: 119 runtimes for 44,489 tasks
+# SWE-smith: 122 runtimes for 45,844 tasks
 scripts/deploy_runtimes.sh "$HARBOR_DATASETS/swesmith-arm64" 20
 
 # SWE-bench Verified arm64 eval slice: 73 runtimes

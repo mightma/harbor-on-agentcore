@@ -119,7 +119,7 @@ directory keeps a per-task hash and deploys a runtime per task anyway.
 | what you do | generate task dirs, pull the published bases | **build 119 images under qemu** |
 | time | ~10 min | **~3 h** (2.5 h build + 25 min wrap) |
 | distinct environments | one per instance (**deliberately**, see 1a) | one per *repository* |
-| runtimes needed | 73 (eval) or 208 (train) | **119 for 44,489 tasks** |
+| runtimes needed | 73 (eval) or 208 (train) | **122 for 45,844 tasks** |
 
 ## From nothing: the order that matters
 
@@ -587,12 +587,13 @@ Two stages, both in that script:
 
 1. **Build** (`build_swesmith_images.py`) — recreate each repo's conda environment on
    arm64 from the published amd64 image, commit as `swesmith.arm64.<repo>`.
-   **\[measured\]** 119 of 134 succeeded, median 843 s each at concurrency 12, ~2.5 h
-   total.
+   **\[measured\]** 124 of 134 succeeded (x86 host: 119 of 134, median 843 s each at
+   concurrency 12, ~2.5 h total).
 2. **Wrap** (`prepare_swesmith_images.py`) — bake in git, uv, `/logs`, and **every task
-   branch** (`git fetch --all`), producing `<repo>-prepared-arm64`. **\[measured\]** ~148 s
-   per image, ~25 min total; 46,448 branches across 121 images (min 10, max 2,391 per
-   repo).
+   branch** (`git fetch --all`), producing `<repo>-prepared-arm64`. **\[measured\]** on
+   Graviton **29 s** per image against **148 s** on the x86 host — a 5× gap on a stage
+   that is pure native work, because the x86 host was emulating every layer of it.
+   47,809 branches across 124 images (min 8, max 2,389 per repo).
 
 Baking the branches is what makes the per-task delta a *local* `git checkout` with no
 network, which is what makes a warm rollout ~3 s instead of ~37 s.
@@ -706,17 +707,28 @@ swesmith/build.sh --repos <failed-keys> --concurrency 8 --push
 swesmith/tasks.sh
 ```
 
-**\[measured\]** 44,489 task dirs over **119 distinct images**, ~9 minutes.
+**\[measured\]** 45,844 task dirs over **122 distinct images**, ~9 minutes, 5.6 GB.
+
+122 and not 124 because two built repositories have no task instances in the dataset —
+the image exists and nothing references it. The number that matters is the last line,
+`0 left per-task`: a task whose repository is missing from `prepared.json` keeps its own
+`environment/`, builds its own image, and consumes its own runtime.
 
 The task dirs are **disposable** — that command rebuilds them. What is durable is
 `swesmith/data/`:
 
 | File | What it is |
 |---|---|
-| `prepared.json` | the 121 prepared images; reconstructable from ECR, but slowly |
-| `prepared_profile_keys.txt` | the 121 profile keys |
-| `gate_passing_images.txt` | the 108 images whose oracle scores 1.0 (see part 2) |
-| `gate_passing_tasks.txt` | the 38,815 task names on those images |
+| `prepared.json` | the 124 prepared images; reconstructable from ECR, but slowly |
+| `gate_passing_images.txt` | the images whose oracle scores 1.0 (see part 2) |
+| `gate_passing_tasks.txt` | the task names on those images |
+
+`prepared.json` keys images in **Docker Hub form** (lowercased, `__` → `_1776_`) because
+they are read back from image tags, while swesmith's profile registry keys them with case
+preserved and `__`. `tasks.py` accepts either and resolves by folding the registry's own
+keys — a plain `_1776_` → `__` substitution recovers only 115 of 124, silently dropping
+every repository with a capital in its name (`HIPS__autograd`,
+`Cog-Creators__Red-DiscordBot`).
 
 Image references in those files are stored **without a registry host** —
 `swesmith-arm64:<key>-prepared-arm64`, not

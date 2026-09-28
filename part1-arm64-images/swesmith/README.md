@@ -14,15 +14,15 @@ holds everything specific to SWE-smith; `../shared/` holds what is not.
 
 ## The shape of this dataset
 
-**No arm64 images exist at all**, so this builds them: 119 repository images under qemu,
-~2.5 h at concurrency 12. The payoff is a training set disjoint from the eval benchmark —
-no shared instances *and* no shared repositories.
+**No arm64 images exist at all**, so this builds them: 124 repository images of 134
+attempted. The payoff is a training set disjoint from the eval benchmark — no shared
+instances *and* no shared repositories.
 
 **One image per repository, shared by all its tasks.** Every task of a repository is a
 branch off the same commit, so one installed conda environment serves all of them and the
 per-task delta is a local `git checkout` against branches already baked into the image:
 ~0 s, no network. That is what makes `../shared/task_sharing.py` the right tool here —
-**\[measured\]** 44,489 tasks resolve to 119 runtimes instead of 44,489. `tasks.py` is the
+**\[measured\]** 45,844 tasks resolve to 122 runtimes instead of 45,844. `tasks.py` is the
 13-line policy over it (group = repository, setup = `git checkout`), and it is the model
 to copy for a dataset whose per-task delta is also cheap.
 
