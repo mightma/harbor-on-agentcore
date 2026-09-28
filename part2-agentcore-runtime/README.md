@@ -161,6 +161,27 @@ rather than a build one: SWE-smith's `combine_file` variants for pyquery, inflec
 patsy patch files that do not exist at the commit their image is built from. Nothing
 about arm64 or about this kit will fix those; excluding them is the fix.
 
+### The half of the reward path this gate does not reach
+
+Gating one task per image is the right unit for "can this image reward a correct patch",
+and it is what makes 122 trials stand in for 45,844 tasks. But it leaves the *per-task*
+half of the shared-image mechanism unverified. Every other task on an image differs from
+the gated one only by the `git checkout <instance_id>` in its healthcheck, and nothing
+has run that checkout for the other 39,564. A branch missing from the baked set, or a
+golden patch that does not apply to the branch it names, fails at reward 0 — which in
+training is indistinguishable from a hard task.
+
+```bash
+scripts/gate_sample.sh "$HARBOR_DATASETS/swesmith-arm64" 50
+SAMPLE_SEED=7 scripts/gate_sample.sh "$HARBOR_DATASETS/swesmith-arm64" 50   # repeat a draw
+```
+
+It oracles a random 50 from the allowlist, so **every trial must score 1.0** — this is
+the golden patch, not a model. It deploys nothing new: sampled tasks share the images
+`deploy_runtimes.sh` already covered. **\[measured\]** 50 sampled tasks land on 35
+distinct images; the first 50 of the sorted list would land on 1, which is why the sample
+is random rather than the head.
+
 ### Turn the gate into what parts 3 and 4 consume
 
 For SWE-bench the gate is 1:1 with tasks, and its result feeds two different shapes:

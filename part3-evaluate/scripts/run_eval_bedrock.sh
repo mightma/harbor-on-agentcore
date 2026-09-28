@@ -39,37 +39,10 @@ export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
 config="$TMPDIR/eval_bedrock_$JOB_NAME.yaml"
 sed "s|bedrock/PLACEHOLDER|bedrock/$MODEL|" "$PART/configs/eval-bedrock.yaml" > "$config"
 
-# Restrict to the oracle-verified subset. Three of the 73 eval tasks have a
-# ceiling of 0 -- two sphinx instances whose PASS_TO_PASS tests fail regardless of
-# the patch, and psf__requests-2317 whose verifier hangs on network calls.
-# Including them just subtracts a constant from the score.
-# SMOKE=n runs only the first n instances of the list -- for proving a path works
-# before paying for all 70. Do NOT try to get that effect by pointing TASK_LIST
-# somewhere empty: an unreadable list used to mean "no filters", which silently ran
-# the whole set.
-include_flags=()
-if [ -n "${SMOKE:-}" ]; then
-  [ -r "$TASK_LIST" ] || { echo "SMOKE needs a readable TASK_LIST: $TASK_LIST" >&2; exit 1; }
-  while read -r instance; do
-    [ -n "$instance" ] && include_flags+=(-i "*$instance")
-    [ "$((${#include_flags[@]} / 2))" -ge "$SMOKE" ] && break
-  done < "$TASK_LIST"
-  echo "SMOKE=$SMOKE: restricting to $((${#include_flags[@]} / 2)) instance(s)"
-elif [ -n "$TASK_LIST" ]; then
-  # A TASK_LIST that cannot be read is a mistake, not a request for everything.
-  if [ ! -r "$TASK_LIST" ] || [ ! -s "$TASK_LIST" ]; then
-    echo "TASK_LIST is set but not a readable non-empty file: $TASK_LIST" >&2
-    echo "to run the whole task set on purpose, pass TASK_LIST=''" >&2
-    exit 1
-  fi
-  while read -r instance; do
-    [ -n "$instance" ] && include_flags+=(-i "*$instance")
-  done < "$TASK_LIST"
-fi
-
-if [ "${#include_flags[@]}" -eq 0 ]; then
-  echo "no instance filter: running every task under $TASKS" >&2
-fi
+# Restrict to the oracle-verified subset: an instance whose own golden patch does
+# not score 1.0 cannot reward a correct answer, so including it just subtracts a
+# constant. SMOKE / SAMPLE narrow it further; see select_tasks.sh for which to use.
+. "$HERE/select_tasks.sh"
 
 echo "job=$JOB_NAME model=bedrock/$MODEL sandbox=$SANDBOX"
 echo "pool=$(find "$TASKS" -mindepth 1 -maxdepth 1 -type d | wc -l) from $TASKS" \

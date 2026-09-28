@@ -1,7 +1,7 @@
 # Part 3 · Evaluate a model with Harbor + AgentCore Runtime
 
-Score two policies on the same 70 SWE-bench Verified arm64 tasks, with every trial's
-sandbox an ACR session:
+Score two policies on the same 397 gate-clean SWE-bench Verified arm64 tasks, with every
+trial's sandbox an ACR session:
 
 - **Claude Sonnet 5** via Bedrock
 - **Qwen3.5** served locally with vLLM
@@ -19,11 +19,28 @@ scripts/run_eval_bedrock.sh                    # $EVAL_BEDROCK_MODEL
 scripts/run_eval_vllm.sh                       # $POLICY_MODEL, serves on GPU 0
 ```
 
-Both default to `swebench/data/swebv-arm64-gated.txt` — the 200 test-set tasks whose
-oracle ceiling is 1.0. The other three are excluded on purpose: two sphinx instances
-have PASS_TO_PASS tests that fail regardless of the patch, and `psf__requests-2317`'s
-verifier hangs on network calls. Including them subtracts a constant from every score
+Both default to `swebench/data/swebv-arm64-gated.txt` — the 397 test-set tasks of 411
+runnable whose oracle ceiling is 1.0. The other 14 are excluded on purpose: their own
+golden patch does not score 1.0, so including them subtracts a constant from every score
 and teaches you nothing.
+
+### Running SWE-smith here, when it is the training set
+
+SWE-smith belongs to part 4, but a policy run over a sample of it is the cheapest check
+that the tasks work as tasks — and it exercises something part 2's gate does not, since
+that gate covers one task per *image*:
+
+```bash
+TASKS="$HARBOR_DATASETS/swesmith-arm64" \
+TASK_LIST="$KIT_STATE_DIR/gate_passing_tasks.txt" \
+SAMPLE=50 scripts/run_eval_bedrock.sh
+```
+
+Do not report the solve rate as a benchmark number: SWE-smith tasks are synthetic bug
+injections, the sample is 50 of 39,686, and only the image each one sits on has a
+verified oracle ceiling — not the task. If a sampled task scores 0 you cannot tell a
+model failure from a task whose golden patch never applied. `gate_sample.sh` in part 2
+is the run that separates them, and it is the one to do first.
 
 ## The comparison is only fair if the scaffold is identical
 
@@ -135,7 +152,32 @@ aws bedrock list-foundation-models --region "$AWS_REGION" \
 ```
 
 Then `SMOKE=1 scripts/run_eval_bedrock.sh <id>` — one task, one trial, and an auth or
-id mistake shows up in about a minute instead of after 70.
+id mistake shows up in about a minute instead of after 397.
+
+### Which subset flag: `SMOKE` proves a path, `SAMPLE` measures
+
+Both narrow `TASK_LIST`, and choosing wrong produces a result that looks fine and means
+nothing. Every list here is sorted, so `SMOKE=n` takes the head of an alphabet:
+**\[measured\]** `SMOKE=50` on the SWE-smith allowlist selects 50 tasks from **one
+repository** — one image, one runtime, one conda environment. `SAMPLE=50` on the same
+list draws across it and hits **35** distinct images. So:
+
+```bash
+SMOKE=1   …   # does the path work at all: auth, sandbox, verifier
+SAMPLE=50 …   # what does the model score, on a subset worth extrapolating from
+SAMPLE=50 SAMPLE_SEED=7 …   # the same draw again
+```
+
+`SAMPLE` is also the only way to touch SWE-smith from here. Harbor takes task names as
+repeated `-i` flags with no file form, and the 39,686-task allowlist is **2,228 kB** of
+argv against this host's `ARG_MAX` of 2,097,152 — it cannot be passed at all. The
+scripts check that budget and say so, rather than dying in `execve` with `E2BIG`. For a
+whole-set run, point `TASKS` at a directory that already holds only those tasks
+(`part4-train/scripts/make_train_set.sh` builds one from the same allowlist).
+
+Selecting zero tasks is an error, never "so run all of them" — only `TASK_LIST=''` with
+no `SMOKE`/`SAMPLE` asks for the whole set. The difference is a 50-task run and a
+45,844-task one.
 
 **What has to move with the model:**
 
