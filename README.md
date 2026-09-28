@@ -27,6 +27,26 @@ cp config.env.example config.env && $EDITOR config.env
 That file holds every account id, role ARN and absolute path the kit needs. Nothing
 else hardcodes them.
 
+### Moving the kit between hosts
+
+```bash
+./sync_host.sh <ssh-host>                        # code only
+./sync_host.sh <ssh-host> --state-from <other>   # code, then the generated lists
+```
+
+Use it rather than your own `rsync --delete`. The lists under `swebench/data/` and
+`swesmith/data/` are script outputs and deliberately **not in git**, so they exist only
+on the host that ran the scripts — and a `--delete` sync from a machine whose `data/` is
+empty wipes them. The symptom arrives much later, as a `TASK_LIST` that cannot be found
+or an eval that quietly runs the wrong set. This kit lost them that way twice; both times
+the fix was an `--exclude` typed on a command line, which is a fix that lives in a shell
+history. `sync_host.sh` is where those excludes live now, and it reports what each
+target actually has.
+
+A fresh host needs those lists either regenerated (parts 1 and 2) or copied
+(`--state-from`). `config.env` is never synced: it holds a `WANDB_API_KEY` and its paths
+are per-host.
+
 ## The one constraint that shapes everything
 
 **ACR only accepts arm64 images.** Almost every published SWE-* task image is
