@@ -41,7 +41,9 @@ scripts/make_train_set.sh    # SWE-smith restricted to the gate allowlist
 
 ### `setup_skyrl.sh` exists because of one silent failure
 
-SkyRL pins Harbor at **0.13.1**, whose `EnvironmentType` has no `agentcore`. Every
+SkyRL pins Harbor to its own revision — a git rev these days
+(`laude-institute/harbor@3de07a0e` as of 2026-09-28), not a version — and that
+revision's `EnvironmentType` has no `agentcore`. Every
 rollout then fails validation *before* creating a sandbox:
 
 ```
@@ -58,7 +60,7 @@ avg_raw_reward: 0.0     response_length: 1.0     policy_loss: 0.0
 
 `response_length: 1.0` is the only tell. Nothing raises. The script rewrites the pin in
 `pyproject.toml` — not via `uv pip install`, because `uv run --extra fsdp --extra
-harbor` re-syncs from the lock and puts 0.13.1 back — then asserts `agentcore` is
+harbor` re-syncs from the lock and restores SkyRL's own pin — then asserts `agentcore` is
 present before returning.
 
 SkyRL touches Harbor through three imports (`TrialConfig`, `Trial.create/run`,
