@@ -101,8 +101,17 @@ RL_EVAL_DATA="${RL_EVAL_DATA:-$HARBOR_DATASETS/swebv-arm64-gated}"
 #     rollouts is already paid for. It fails with "CUDA compiler and CUDA toolkit
 #     headers are incompatible" because fla's own guard only checks that an nvcc
 #     binary exists. This falls back to the Triton kernel.
+#
+#   VLLM_USE_FLASHINFER_SAMPLER=0  the third of the same kind, and the one that
+#     bites first: FlashInfer JIT-compiles its top-k/top-p sampler during vLLM's
+#     *warmup*, so the engine dies right after loading the weights with
+#     "Could not find nvcc and default cuda_home='/usr/local/cuda' doesn't exist".
+#     There is no CUDA toolkit on a DLAMI outside the venv. Falls back to the
+#     PyTorch-native sampler: same distribution, different throughput. Measured on
+#     part 3's eval before it reached part 4.
 export NCCL_NVLS_ENABLE="${NCCL_NVLS_ENABLE:-0}"
 export FLA_TILELANG="${FLA_TILELANG:-0}"
+export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 # No EFA device on this instance; the DLAMI's aws-ofi-nccl plugin fails to
 # initialise and then NCCL segfaults inside commAlloc() on the first collective.
 export NCCL_NET_PLUGIN="${NCCL_NET_PLUGIN:-none}"
@@ -170,8 +179,42 @@ mkdir -p "$OUT"
 
 # SkyRL always merges examples/.../harbor_trial_config/default.yaml, so replacing
 # that file is the way to change the Harbor trial defaults.
-cp "$PART/configs/harbor_trial_acr.yaml" \
-   "$SKYRL_DIR/examples/train_integrations/harbor/harbor_trial_config/default.yaml"
+trial_config="$SKYRL_DIR/examples/train_integrations/harbor/harbor_trial_config/default.yaml"
+cp "$PART/configs/harbor_trial_acr.yaml" "$trial_config"
+
+# SANDBOX=docker swaps the sandbox and nothing else. Unlike part 3 there is no `-e`
+# to pass -- SkyRL constructs the trial itself -- so the type is rewritten in the
+# config that was just copied. The agentcore-only kwargs below it are left in place:
+# Harbor's docker environment takes **kwargs and ignores what it does not use, which
+# is how part 3's SANDBOX=docker works against the same file.
+#
+# Two things to check before believing a docker run here, both of which cost more
+# than the flag saves:
+#
+#   1. The task images are arm64. On x86 docker needs qemu -- measured at 15.5-19x
+#      slower -- and without binfmt registered it cannot run them at all
+#      (`exec format error`). This host is checked below.
+#   2. Every container is 2 vCPU of *this* box, the one that is also training. At
+#      CONCURRENCY=128 that is 256 vCPU of rollouts competing with the trainer for
+#      CPU and RAM. AgentCore's sessions are elsewhere, which is the whole reason
+#      part 4 uses it.
+SANDBOX="${SANDBOX:-agentcore}"
+if [ "$SANDBOX" != "agentcore" ]; then
+  sed -i "s/^  type: agentcore$/  type: $SANDBOX/" "$trial_config"
+  grep -q "^  type: $SANDBOX$" "$trial_config" || {
+    echo "could not rewrite the environment type to '$SANDBOX' in $trial_config" >&2
+    exit 1
+  }
+  if [ "$SANDBOX" = "docker" ] && ! docker run --rm --platform linux/arm64 \
+       arm64v8/alpine true >/dev/null 2>&1; then
+    echo "SANDBOX=docker, but this host cannot run an arm64 container." >&2
+    echo "The task images are arm64. Register the emulator with" >&2
+    echo "  docker run --privileged --rm tonistiigi/binfmt --install arm64" >&2
+    echo "and expect 15-19x slower trials, or run on an arm64 host." >&2
+    exit 1
+  fi
+fi
+echo "sandbox=$SANDBOX"
 
 # The provider pushes each task image to ECR on first use. `docker push` needs a
 # login; do it once here so 32 concurrent trials do not each discover that.

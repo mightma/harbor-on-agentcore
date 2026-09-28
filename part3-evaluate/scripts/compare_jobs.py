@@ -9,6 +9,13 @@ same 40 tasks can land on the same percentage while disagreeing about which ones
 passed, and that disagreement is the only thing that says the sandbox changed a
 result rather than the sampling.
 
+It leads with **which sandbox each job actually used**, read from the trial logs rather
+than from the job name or the config. That is not decoration. This kit published an
+"AgentCore vs docker" table in which both jobs had run on AgentCore: the jobs were named
+`eval-docker-*` and `SANDBOX=docker` was set, but `run_eval_bedrock.sh` did not yet pass
+`-e`, so the variable was read by nobody. The config file is no help either -- it records
+what the yaml said, not what the `-e` override resolved to. Only the trial log knows.
+
 So it reports, over the intersection only:
 
   per-task agreement      how many tasks got the same reward, and every task that
@@ -43,6 +50,26 @@ def _stage(result: dict, stage: str) -> float | None:
     block = result.get(stage) or {}
     start, finish = _dt(block.get("started_at")), _dt(block.get("finished_at"))
     return (finish - start).total_seconds() if start and finish else None
+
+
+def sandbox_used(job: Path, sample: int = 20) -> str:
+    """Which sandbox the trials actually ran on, from their logs.
+
+    Harbor announces the provider it starts -- "Started AgentCore sandbox session",
+    or docker's own container lines -- so the log is the only record that reflects an
+    `-e` override. A job whose trials disagree gets both names back, which is worth
+    seeing rather than averaging away.
+    """
+    seen: set[str] = set()
+    for log in sorted(job.glob("*/trial.log"))[:sample]:
+        head = log.read_text(errors="replace")[:4000]
+        if "AgentCore sandbox session" in head or "AgentCore runtime" in head:
+            seen.add("agentcore")
+        if "docker compose" in head or "Started docker" in head or "container" in head:
+            seen.add("docker")
+    if not seen:
+        return "unknown (no trial.log)"
+    return "+".join(sorted(seen)) + (f" (of {sample} sampled)" if len(seen) > 1 else "")
 
 
 def load(job: Path) -> dict[str, dict]:
@@ -108,8 +135,12 @@ def main() -> int:
     if not shared:
         print("no tasks in common")
         return 2
-    print(f"{args.job_a.name}: {len(a)} trials")
-    print(f"{args.job_b.name}: {len(b)} trials")
+    sa_box, sb_box = sandbox_used(args.job_a), sandbox_used(args.job_b)
+    print(f"{args.job_a.name}: {len(a)} trials, sandbox={sa_box}")
+    print(f"{args.job_b.name}: {len(b)} trials, sandbox={sb_box}")
+    if sa_box == sb_box:
+        print(f"\n  NOTE: both jobs ran on {sa_box}. Whatever differs between them, the")
+        print("  sandbox does not -- read the numbers below as run-to-run variation.")
     print(f"comparing the {len(shared)} in common\n")
 
     # Rewards and per-stage medians compare over the intersection; throughput has to

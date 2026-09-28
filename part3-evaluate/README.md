@@ -287,10 +287,9 @@ ACR is *faster* at agent install because a session gets 2 dedicated vCPUs, while
 local containers fight over 8 cores. The two 600 s entries are build timeouts, and that
 14 s median *includes* first-time image push and runtime deployment.
 
-## AgentCore or Docker: measured head to head, same scaffold
+## AgentCore or Docker: how to compare them, and why this kit has not
 
-One config, one switch — `SANDBOX=docker` flips the provider and changes nothing else, so
-the two runs cannot drift apart in anything but the sandbox:
+`SANDBOX=docker` flips the provider and changes nothing else:
 
 ```bash
 scripts/run_eval_bedrock.sh                                  # AgentCore
@@ -298,50 +297,51 @@ SANDBOX=docker N_CONCURRENT=16 scripts/run_eval_bedrock.sh   # local containers
 uv run scripts/compare_jobs.py "$HARBOR_JOBS/<job-a>" "$HARBOR_JOBS/<job-b>"
 ```
 
-**\[measured\]** all 397 tasks on both, Sonnet 5, 16 concurrent, on one c7gd.8xlarge:
+**There is no measured docker number here, and an earlier version of this file claimed
+one.** Three jobs named `eval-docker-*` were run before `run_eval_bedrock.sh` had the
+`-e "$SANDBOX"` flag, so `SANDBOX=docker` was read by nobody and all three ran on
+AgentCore. Their trial logs say `Reusing AgentCore runtime hb_…` outright. The flag and
+the write-up landed in the same commit, which is exactly the sort of thing the oracle
+gate exists to catch and nothing was gating *this*.
 
-| | AgentCore | Docker |
-|---|---|---|
-| Solved | 186/397 = **46.9%** | 183/397 = **46.1%** |
-| Errors | 0 | 0 |
-| Environment start, median | 3 s | 3 s |
-| Agent setup / agent / verifier, median | 12 / 62 / 12 s | 11 / 59 / 13 s |
-| **Trial time, summed** | **666.0 min** | **665.6 min** |
-| Wall clock | 44.6 min | 45.7 min |
-| Achieved concurrency | 14.9× | 14.5× |
-| Model cost | $28.03 | $28.64 |
+`compare_jobs.py` now prints the sandbox each job actually used, read from the trial
+logs, so a mislabelled comparison cannot be published from here again.
 
-**Per-trial speed is identical** — 666.0 against 665.6 minutes of summed trial time, a 0.06%
-difference. A warm AgentCore runtime opens a microVM as fast as docker starts a container
-(3 s median both ways), which is the whole reason part 2 keeps the runtimes deployed. A
-40-task pilot had docker 10% slower; at 397 that vanished, so treat small-sample timing
-gaps as noise.
+**Before you run the docker half, check the architecture.** The task images are arm64.
+On an arm64 host (a Graviton) docker runs them natively; on x86 it needs qemu, which
+this kit measured at **15.5–19× slower** — a comparison of the sandbox would instead be
+a measurement of emulation. Confirm with `docker run --rm --platform linux/arm64
+arm64v8/alpine uname -m`: `exec format error` means the host cannot run them at all.
 
-**What differs is the concurrency ceiling, not the speed.** Docker's is this host's CPU: a
-container is 2 vCPU, so 32 vCPU tops out near 16. AgentCore's is service-side and was
-nowhere near reached — during the docker run this box was saturated, during the AgentCore
-run its load average sat at **0.1**. That only matters above about vCPU/2 concurrent, which
-is exactly where part 4 lives: RL rollouts at concurrency 96 would need 192 vCPU of local
-containers.
+What can still be said without that run, because it follows from what *was* measured:
 
-**Cost is model tokens, either way.** $28 of Sonnet 5 dwarfs the sandbox: docker's is the
-instance you are already renting (~$1 of c7gd.8xlarge for 45 minutes), and AgentCore's is
-397 sessions × 91 s ≈ **10 hours of session time billed separately** — it is *not* in
-Harbor's `cost_usd`, which counts model tokens only. Check Cost Explorer for the real
-figure; the role on this host could not (`ce:GetCostAndUsage` denied).
+- **The concurrency ceiling differs, whatever the per-trial speed turns out to be.** A
+  docker container here is 2 vCPU of the host, so 32 vCPU tops out near 16 concurrent.
+  AgentCore's ceiling is service-side (25 sessions/s) and was nowhere near reached — the
+  measured runs achieved **14.9×** of a configured 16 while this box's load average sat
+  at 0.1. Part 4 is where that bites: rollouts at concurrency 96 would need 192 vCPU of
+  local containers, on the same box that is training.
+- **Cost is model tokens either way.** $28 of Sonnet 5 dwarfs the sandbox: docker's is
+  the instance you already rent (~$1 of c7gd.8xlarge for 45 minutes), AgentCore's is 397
+  sessions × 91 s ≈ **10 hours of session time billed separately** — *not* in Harbor's
+  `cost_usd`, which counts model tokens only. Check Cost Explorer for the real figure;
+  the role on this host could not (`ce:GetCostAndUsage` denied).
 
 ### The number that should change how you read every other number
 
-`compare_jobs.py` compares per task, not just in aggregate, and the two runs **disagreed on
-55 of 397 tasks — they agreed on 86%**. Not a sandbox effect: the disagreements run both
-ways, and the sandbox cannot change whether a patch compiles. It is `temperature: 0` not
-being deterministic end to end — server-side batching, KV-cache reuse and floating-point
-reduction order all move logits between otherwise identical requests.
+The two 397-task runs above were, it turns out, **the same configuration twice** — and
+that makes them a cleaner measurement than the one they were mislabelled as.
+`compare_jobs.py` compares per task, not just in aggregate, and they **disagreed on 55 of
+397 tasks — they agreed on 86%**, while landing 0.8 points apart in aggregate (46.9% vs
+46.1%). With the sandbox eliminated as a variable, the cause is unambiguous:
+`temperature: 0` is not deterministic end to end — server-side batching, KV-cache reuse
+and floating-point reduction order all move logits between otherwise identical requests.
 
 A 13.9% flip rate, roughly symmetric, puts the standard deviation of a single 397-task run
 at **about ±1.8 percentage points**. So:
 
-- 46.9% versus 46.1% is **inside the noise**. Neither sandbox is better at solving tasks.
+- 46.9% versus 46.1% is the **same configuration disagreeing with itself**. Read it as
+  the size of the noise, not as a result about anything.
 - Comparing two models, or two checkpoints, on one run of this set cannot resolve a
   difference smaller than roughly **4 points**. Part 4's warning that "a 70-task eval set
   cannot resolve 10% from 13%" is the same fact with a smaller n.

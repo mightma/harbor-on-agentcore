@@ -135,6 +135,61 @@ experts and 8 per token. `FLA_TILELANG=0` matters *more*, not less: the
 gated-delta-rule layers are what need it and there are no fewer of them. What does not
 carry over is the engine grid — see "Scaling notes".
 
+## Where the step time went, and which layer is the bottleneck
+
+You do not have to instrument anything: SkyRL enables both monitors by default
+(`trainer.enable_ray_gpu_monitor` and
+`generator.inference_engine.enable_ray_prometheus_stats`), so with `LOGGER=wandb` these
+land in W&B every step. The four groups, and what each one answers:
+
+| Metric | Answers |
+|---|---|
+| `timing/step` | the denominator for everything below |
+| `timing/generate` | rollouts: model calls **plus** sandbox execs plus verifier |
+| `timing/train_critic_and_policy` | the actual forward+backward |
+| `timing/fwd_logprobs_values_reward`, `timing/convert_to_training_input`, `timing/compute_advantages_and_returns`, `timing/sync_weights`, `timing/save_checkpoints` | the rest, usually small |
+| `trainer/tokens_per_second_per_gpu` | training throughput — note it divides by `train_critic_and_policy` only, so it says nothing about the step |
+| `ray/gpu.util.avg`, `ray/node.0.gpu.<i>.util`, `ray/gpu.mem_used_gb.avg` | GPU utilisation and memory, per GPU and averaged |
+| `vllm/train/num_requests_waiting` / `num_requests_running` | engine queue depth **during generation** |
+| `vllm/train/generation_throughput_tok_s`, `ttft_seconds_avg`, `tpot_seconds_avg`, `kv_cache_usage_perc`, `prefix_cache_hit_rate` | engine-side detail, same window |
+
+### Read them in this order
+
+**1. `timing/generate ÷ timing/step`.** Expect this to dominate, and do not treat that as
+a problem to fix — it is what agentic RL *is*. A rollout here is 8 turns, each a model
+call plus a sandbox round trip, then a pytest suite: part 3 measured **57–62 s of agent
+and 12–25 s of verifier per trial**, against a backward over 3B active parameters. If
+generate is 90% of the step, the GPUs are idle for most of the wall clock by design.
+
+**2. If generate dominates, split it with `vllm/train/num_requests_waiting`.**
+
+- **Waiting high, GPU util high** → engine-bound. More `ENGINES`/`TP`, or a shorter
+  `MAX_MODEL_LEN`. This is the case where GPU work is the constraint.
+- **Waiting ≈ 0, `num_requests_running` well under `CONCURRENCY`, GPU util low** →
+  **sandbox-bound**. The engine is starved because rollouts are waiting on sandbox execs
+  and verifiers. Raise `CONCURRENCY` (AgentCore's ceiling is service-side, not this
+  host's) until `num_requests_waiting` starts to climb. This is the expected regime.
+
+**3. Then go to the sandbox side.** The trial results are Harbor's, so part 3's tooling
+reads them directly — no new script:
+
+```bash
+uv run ../part3-evaluate/scripts/summarize.py "$KIT_WORK_DIR/runs/<name>/trials"
+```
+
+That gives the same stage medians as an eval (`environment_setup`, `agent_setup`,
+`agent_execution`, `verifier`), which is how you tell a slow *sandbox* from a slow
+*agent*. Two specific things to look for, both measured elsewhere in this kit:
+`environment_setup` above ~30 s means runtimes are being created rather than reused
+(check `share_by_content` and the deployed set), and `agent_setup` around 12 s is
+terminus-2 installing tmux and asciinema on every single trial — part 1's
+`--bake-harness` exists to reclaim exactly that.
+
+**4. Only then look at `trainer/tokens_per_second_per_gpu` and `ray/gpu.util.avg`.**
+Tuning the training half while it is 10% of the step buys 10% of nothing. The reason to
+watch GPU memory is different — it is how you see how close `GPU_MEM_UTIL` and the FSDP
+shards are to colliding (see "Scaling notes").
+
 ## Bring your own model
 
 **Training needs weights you hold.** `bedrock/…` and any hosted API are eval-only —
@@ -232,6 +287,36 @@ part 3 serves them directly with no conversion — the same eval, the same task 
 cd ../part3-evaluate
 scripts/run_eval_vllm.sh "$KIT_WORK_DIR/runs/swesmith-Qwen3.5-35B-A3B/exports/global_step_15"
 ```
+
+## Swapping AgentCore for local docker
+
+```bash
+SANDBOX=docker scripts/run_train.sh
+```
+
+It rewrites `environment.type` in the trial config and changes nothing else — same
+training set, same eval set, same hyperparameters, same seed. The agentcore-only kwargs
+stay in the file; Harbor's docker environment takes `**kwargs` and ignores what it does
+not use.
+
+**But it is not a free swap here, and the reason is architecture, not configuration.**
+
+| | AgentCore | local docker |
+|---|---|---|
+| Task images | arm64 microVM, native | arm64 containers — **native only on an arm64 host** |
+| On x86 | n/a | qemu, **\[measured\]** 15.5–19× slower per trial |
+| Where the CPU comes from | the service | this box, the one that is also training |
+| Concurrency ceiling | service-side, 25 sessions/s | vCPU ÷ 2, minus whatever the trainer needs |
+
+So on a GPU host — which is x86 in practice — `SANDBOX=docker` either refuses to start
+(`exec format error`, no binfmt) or runs an order of magnitude slower under emulation.
+`run_train.sh` checks for the emulator and fails with that explanation rather than
+letting you discover it after a step of rollouts. A like-for-like sandbox comparison
+wants an arm64 host, and that host has no GPUs.
+
+**This kit has no measured docker-vs-AgentCore number.** It briefly claimed one; the jobs
+were named `eval-docker-*` but had run on AgentCore because the `-e` flag did not exist
+yet. See part 3's README.
 
 ## Scaling notes
 

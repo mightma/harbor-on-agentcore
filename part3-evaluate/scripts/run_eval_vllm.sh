@@ -43,9 +43,38 @@ GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
 # Point this at any vLLM install to skip `uv sync --extra serve`, e.g. part 4's
 # SkyRL venv.
 VLLM="${VLLM:-$PART/.venv/bin/vllm}"
+# Parity with run_eval_bedrock.sh, which had this and this script did not -- so the
+# vLLM path could not be run against local containers at all. Setting SANDBOX here
+# without the -e below is precisely how this kit came to publish a docker comparison
+# that had run on AgentCore, so the two belong in the same edit.
+SANDBOX="${SANDBOX:-agentcore}"
 JOB_NAME="${JOB_NAME:-swebv-vllm-$SERVED_NAME-$(date +%Y%m%d-%H%M%S)}"
 
 export HARBOR_AGENTCORE_ROLE_ARN="$ACR_EXECUTION_ROLE_ARN"
+
+# FlashInfer's top-k/top-p sampler is JIT-compiled on first use, and "first use" is
+# vLLM's own warmup -- so without this the server dies *after* loading 72 GB of
+# weights, with a traceback whose visible end is the useless "Engine core
+# initialization failed. See root cause above." The root cause, 200 lines up:
+#
+#   flashinfer/jit/cpp_ext.py, in get_cuda_path
+#   RuntimeError: Could not find nvcc and default cuda_home='/usr/local/cuda'
+#                 doesn't exist
+#
+# This is the same failure shape as part 4's FLA_TILELANG=0: a library prefers a
+# JIT kernel, checks only loosely for a toolchain, and fails at codegen. The same
+# remedy applies -- take the PyTorch-native path.
+#
+# Nothing is lost here. The eval runs at temperature 0.0, so a fused top-k/top-p
+# kernel is sampling from a distribution it never consults; even for part 4's
+# rollouts the native path differs in throughput, not in correctness.
+#
+# The alternative is to give FlashInfer a toolchain: torch ships one inside the
+# venv at nvidia/cu13 (a real nvcc, ptxas and headers), so CUDA_HOME=<that> also
+# gets past this. It is not the default because that nvcc is 13.4 against a torch
+# built for 13.0, which is how you buy "CUDA compiler and CUDA toolkit headers are
+# incompatible" a few minutes later instead of now.
+export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 if [ ! -x "$VLLM" ]; then
   echo "no vllm at $VLLM -- run 'uv sync --extra serve' or set VLLM=<path>" >&2
@@ -60,9 +89,9 @@ sed "s|hosted_vllm/PLACEHOLDER|hosted_vllm/$SERVED_NAME|; s|127.0.0.1:8000|127.0
 # to use. A list that cannot be read is a mistake there, not "run everything".
 . "$HERE/select_tasks.sh"
 
-echo "job=$JOB_NAME model=$MODEL served=$SERVED_NAME"
+echo "job=$JOB_NAME model=$MODEL served=$SERVED_NAME sandbox=$SANDBOX"
 echo "pool=$(find "$TASKS" -mindepth 1 -maxdepth 1 -type d | wc -l) from $TASKS" \
-     "selected=$((${#include_flags[@]} / 2)) n=$N_CONCURRENT gpus=$SERVE_GPUS dp=$DP"
+     "selected=$((${#include_flags[@]} / 2)) n=$N_CONCURRENT gpus=$SERVE_GPUS dp=$DP tp=$TP"
 # pool is how many task dirs exist, selected is how many will actually run: the task
 # directory is generated before the gate, so it still holds the tasks the gate later
 # rejected. TASK_LIST is what excludes them.
@@ -111,6 +140,7 @@ aws ecr get-login-password --region "$AWS_REGION" 2>/dev/null \
 set +e
 "$PART/.venv/bin/harbor" run -c "$config" -p "$TASKS" \
   "${include_flags[@]+"${include_flags[@]}"}" \
+  -e "$SANDBOX" \
   -n "$N_CONCURRENT" \
   -o "$HARBOR_JOBS" --job-name "$JOB_NAME" "${@:2}" 2>&1 \
   | sed 's/\x1b\[[0-9;]*m//g' \
