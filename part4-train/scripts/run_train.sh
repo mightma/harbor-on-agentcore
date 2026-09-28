@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# GRPO with SkyRL on 8x H100, FSDP, and every rollout's sandbox an AgentCore
-# Runtime session.
+# GRPO with SkyRL on 8 GPUs, FSDP, and every rollout's sandbox an AgentCore
+# Runtime session. Measured on 8x H100 80GB; the current policy needs the 143 GB
+# of an H200 (see the sizing note below).
 #
 #   Train: SWE-smith arm64      (part 1 built it, part 2 gated it)
 #   Eval:  SWE-bench Verified arm64 held-out repositories
@@ -10,9 +11,28 @@
 # SWE-bench-only setup could not offer (see part 1).
 #
 #   scripts/run_train.sh                                  # $POLICY_MODEL
-#   scripts/run_train.sh Qwen/Qwen3.5-4B                  # the measured config
+#   scripts/run_train.sh Qwen/Qwen3.5-4B ENGINES=8 TP=1   # the measured config
 #   MAX_STEPS=1 CONCURRENCY=16 BATCH=8 scripts/run_train.sh   # shakedown, do this first
-#   scripts/run_train.sh Qwen/Qwen3-Coder-30B-A3B-Instruct TP=4 ENGINES=2
+#
+# Sizing the engine grid, which is the one thing you cannot leave at a default
+# when the policy grows. With colocate_all the vLLM engines live on the *same*
+# GPUs as the FSDP policy, so both have to fit. For Qwen3.5-35B-A3B --
+# **[computed, not measured]** 35.95B params, bf16:
+#
+#   FSDP state, full shard over 8 GPUs   ~72 GB/GPU
+#     params 9 + grads 9 + Adam m,v fp32 36 + fp32 master 18
+#   engine weights, per GPU              72 GB at TP=1  -> 144 GB total, OOM on a
+#                                        143 GB H200 before any KV cache
+#                                        18 GB at TP=4  -> fits
+#
+# Hence ENGINES=2 TP=4 as the default rather than SkyRL's ENGINES=8 TP=1: a
+# mixture of experts is sized by its *total* parameters, not its active ones.
+# 35B-A3B activates 3B per token and still carries 72 GB of weights. ENGINES*TP
+# must equal POLICY_GPUS, which the check below enforces.
+#
+# If step 1 still OOMs, GPU_MEM_UTIL is the knob -- it caps the engine's KV pool
+# as a fraction of *total* GPU memory, and sleep/wake does not give that back
+# until the engine has already reserved it.
 #
 # Structured after SkyRL's own 8-GPU recipe
 # (examples/train_integrations/harbor/run_codecontest.sh).
@@ -95,10 +115,12 @@ N_SAMPLES="${N_SAMPLES:-8}"
 BATCH="${BATCH:-32}"
 CONCURRENCY="${CONCURRENCY:-128}"
 TRAJ_PER_SEC="${TRAJ_PER_SEC:-5}"
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.8}"
+# 0.8 was right when the engine held a 4B; at 72 GB of weights the engine and the
+# FSDP shards are competing for the same card. See the sizing note in the header.
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.6}"
 POLICY_GPUS="${POLICY_GPUS:-8}"
-ENGINES="${ENGINES:-8}"
-TP="${TP:-1}"
+ENGINES="${ENGINES:-2}"
+TP="${TP:-4}"
 MICRO_TRAIN="${MICRO_TRAIN:-1}"
 MICRO_FORWARD="${MICRO_FORWARD:-1}"
 USE_KL_LOSS="${USE_KL_LOSS:-false}"
@@ -120,6 +142,13 @@ LOGGER="${LOGGER:-wandb}"
 #
 # Both are set for any Qwen3.5-family policy. They are harmless on a plain
 # text model, so they are not conditioned on the model name.
+#
+# The MoE members of the family are the same shell over the same hybrid stack:
+# 35B-A3B is Qwen3_5MoeForConditionalGeneration, image_token_id 248056, 40 layers
+# with full attention every 4th, 256 experts and 8 per token. So both flags carry
+# over unchanged and FLA_TILELANG=0 stays load-bearing -- the gated-delta-rule
+# layers are what needs it, and an MoE has more of them, not fewer. What does not
+# carry over is the engine grid; see the sizing note in the header.
 REMOVE_MICROBATCH_PADDING="${REMOVE_MICROBATCH_PADDING:-false}"
 LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-true}"
 

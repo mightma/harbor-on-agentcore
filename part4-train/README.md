@@ -1,6 +1,7 @@
 # Part 4 · Train a model with Harbor + AgentCore Runtime
 
-GRPO with SkyRL on 8× H100, every rollout's sandbox an ACR session.
+GRPO with SkyRL on 8 GPUs, every rollout's sandbox an ACR session. Measured on 8× H100
+80GB with a 4B policy; the current default policy needs H200s -- see "Scaling notes".
 
 | | |
 |---|---|
@@ -127,6 +128,13 @@ Plus two Qwen3.5-specific flags, both taken from SkyRL's own
 - `language_model_only=true` — nothing here sends images, so the vision tower is dead
   weight in the policy, the reference model and the engine alike.
 
+Both carry over unchanged to the MoE members of the family: 35B-A3B is
+`Qwen3_5MoeForConditionalGeneration` — the same VLM shell, the same `image_token_id`
+248056, the same hybrid stack with full attention every 4th of 40 layers, plus 256
+experts and 8 per token. `FLA_TILELANG=0` matters *more*, not less: the
+gated-delta-rule layers are what need it and there are no fewer of them. What does not
+carry over is the engine grid — see "Scaling notes".
+
 ## Bring your own model
 
 **Training needs weights you hold.** `bedrock/…` and any hosted API are eval-only —
@@ -135,7 +143,7 @@ can both shard with FSDP and serve with its own vLLM engines, which in practice 
 local or Hub HF model directory. Set `POLICY_MODEL`, or pass it as the first argument:
 
 ```bash
-scripts/run_train.sh Qwen/Qwen3.5-4B                       # the measured config
+scripts/run_train.sh Qwen/Qwen3.5-4B ENGINES=8 TP=1     # the measured config
 scripts/run_train.sh /path/to/my-checkpoint                # a local directory
 ```
 
@@ -222,21 +230,41 @@ part 3 serves them directly with no conversion — the same eval, the same task 
 
 ```bash
 cd ../part3-evaluate
-scripts/run_eval_vllm.sh "$KIT_WORK_DIR/runs/swesmith-Qwen3.5-9B/exports/global_step_15"
+scripts/run_eval_vllm.sh "$KIT_WORK_DIR/runs/swesmith-Qwen3.5-35B-A3B/exports/global_step_15"
 ```
 
 ## Scaling notes
 
-`config.env` defaults `POLICY_MODEL` to Qwen3.5-9B because that is what was asked for,
-but **no run in this project used a 9B policy** — 4B is the largest measured. Expect to
-retune, in this order:
+`config.env` defaults `POLICY_MODEL` to **Qwen3.5-35B-A3B** because that is what was
+asked for, but **no run in this project used a policy larger than 4B**. Everything below
+is arithmetic, not measurement.
+
+A mixture of experts is sized by its **total** parameters, not its active ones. 35B-A3B
+activates ~3B per token and still carries 35.95B weights = **72 GB at bf16**, and under
+`colocate_all` the vLLM engines sit on the same GPUs as the FSDP policy:
+
+| | per GPU, 8-way |
+|---|---|
+| FSDP state | **~72 GB** — params 9 + grads 9 + Adam *m,v* fp32 36 + fp32 master 18 |
+| engine weights at `TP=1` | 72 GB → **144 GB total, OOM** on a 143 GB H200 before any KV cache |
+| engine weights at `TP=4` | 18 GB → fits |
+
+That is why the defaults are now `ENGINES=2 TP=4` and `GPU_MEM_UTIL=0.6` rather than
+SkyRL's `ENGINES=8 TP=1`. It also means **this policy does not fit an 80 GB H100 at all**
+in this configuration; the numbers above assume H200s.
+
+Retune in this order:
 
 | Knob | Default | If you OOM |
 |---|---|---|
-| `MICRO_TRAIN` / `MICRO_FORWARD` | 1 | already minimal; go to the next row |
-| `GPU_MEM_UTIL` | 0.8 | lower to 0.7 — engines and policy share GPUs under `colocate_all` |
-| `TP` / `ENGINES` | 1 / 8 | `TP=2 ENGINES=4`; `ENGINES*TP` must equal `POLICY_GPUS` or Ray hangs in placement |
+| `GPU_MEM_UTIL` | 0.6 | lower to 0.5 — it caps the engine's KV pool as a fraction of *total* memory, and sleep/wake does not give that back until the engine has reserved it |
+| `TP` / `ENGINES` | 4 / 2 | `TP=8 ENGINES=1` puts 9 GB of engine weights on each GPU; `ENGINES*TP` must equal `POLICY_GPUS` or Ray hangs in placement |
 | `BATCH` / `N_SAMPLES` | 32 / 8 | reduce `BATCH`; keep `N_SAMPLES` ≥ 4 or GRPO groups get too small to give advantage |
+| `MICRO_TRAIN` / `MICRO_FORWARD` | 1 | already minimal |
+
+Do the `MAX_STEPS=1 CONCURRENCY=16 BATCH=8` shakedown first. The failures that matter
+here land on the first **backward**, which is after a full step of rollouts has already
+been paid for — that is where `remove_microbatch_padding` and `FLA_TILELANG` bite.
 
 `colocate_all=true` stays on even at 8 GPUs — SkyRL's own large recipe keeps it, and
 sleeping the engine while training is worth more than the swap cost. It is also what

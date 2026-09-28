@@ -5,7 +5,17 @@
 #   scripts/run_eval_vllm.sh                                 # $POLICY_MODEL
 #   scripts/run_eval_vllm.sh Qwen/Qwen3.5-4B
 #   scripts/run_eval_vllm.sh "$KIT_WORK_DIR/runs/.../exports/global_step_20"
-#   SERVE_GPUS=0,1 DP=2 scripts/run_eval_vllm.sh              # bigger policy
+#   SERVE_GPUS=0,1 DP=2 scripts/run_eval_vllm.sh              # two replicas
+#   SERVE_GPUS=0,1,2,3 TP=4 scripts/run_eval_vllm.sh          # one model, four GPUs
+#
+# DP or TP, and the difference matters once the policy is large: DP puts a *whole
+# copy* on each GPU and serves them round-robin, TP splits one copy across them.
+# A mixture of experts is where this bites, because what has to fit is the total
+# parameter count and not the active one -- Qwen3.5-35B-A3B activates 3B per token
+# but is 35.95B of weights, i.e. **72 GB at bf16**. That still fits one 143 GB H200
+# (DP=1, TP=1, leaving ~50 GB of KV cache at 0.85 utilisation), fits nowhere on an
+# 80 GB H100, and with TP=4 drops to 18 GB a GPU and leaves room for a long
+# context. Set SERVE_GPUS to as many GPUs as DP*TP.
 #
 # Same scaffold as run_eval_bedrock.sh on purpose, so the two numbers compare.
 # The model call goes to vLLM on 127.0.0.1: the sandbox never needs a network path
@@ -28,6 +38,8 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 PORT="${PORT:-8000}"
 SERVE_GPUS="${SERVE_GPUS:-0}"
 DP="${DP:-1}"
+TP="${TP:-1}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
 # Point this at any vLLM install to skip `uv sync --extra serve`, e.g. part 4's
 # SkyRL venv.
 VLLM="${VLLM:-$PART/.venv/bin/vllm}"
@@ -55,13 +67,23 @@ echo "pool=$(find "$TASKS" -mindepth 1 -maxdepth 1 -type d | wc -l) from $TASKS"
 # directory is generated before the gate, so it still holds the tasks the gate later
 # rejected. TASK_LIST is what excludes them.
 
-echo "serving $MODEL as $SERVED_NAME on :$PORT"
+# Catch the mismatch here: vLLM otherwise starts, spends minutes loading weights,
+# and only then fails to place the grid -- or worse, silently uses fewer GPUs than
+# you are paying for.
+n_gpus=$(awk -F, '{print NF}' <<< "$SERVE_GPUS")
+if [ "$((DP * TP))" -ne "$n_gpus" ]; then
+  echo "DP*TP ($DP*$TP) must equal the number of GPUs in SERVE_GPUS ($n_gpus: $SERVE_GPUS)" >&2
+  exit 1
+fi
+
+echo "serving $MODEL as $SERVED_NAME on :$PORT (dp=$DP tp=$TP gpus=$SERVE_GPUS)"
 CUDA_VISIBLE_DEVICES="$SERVE_GPUS" "$VLLM" serve "$MODEL" \
   --served-model-name "$SERVED_NAME" \
   --port "$PORT" \
   --max-model-len "$MAX_MODEL_LEN" \
   --data-parallel-size "$DP" \
-  --gpu-memory-utilization 0.85 \
+  --tensor-parallel-size "$TP" \
+  --gpu-memory-utilization "$GPU_MEM_UTIL" \
   --no-enable-log-requests \
   > "$HARBOR_JOBS/$JOB_NAME.vllm.log" 2>&1 &
 vllm_pid=$!

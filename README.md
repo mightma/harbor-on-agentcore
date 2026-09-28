@@ -151,8 +151,8 @@ cannot build images at all. Anything not marked is a projection. In particular:
 | Two runs of the same 397 tasks disagree on **55 of them** at `temperature: 0` | **\[measured\]** — ±1.8 pt of noise, so deltas under ~4 points are unresolvable in one run |
 | Native arm64 is 16× faster per image than qemu (131 s vs 2112 s for a django instance) | **\[measured\]** c7gd.8xlarge vs 8-vCPU x86 |
 | Proxy reached from *inside* a sandbox over `network_mode: VPC` | **untested.** Configuration only, but nobody has run it |
-| **Qwen3.5-9B anywhere in this kit** | **untested.** `config.env` defaults to it because that is what was asked for, but no run in this repo used a 9B policy. 4B is the largest measured. Expect to retune `MICRO_TRAIN`/`GPU_MEM_UTIL` in part 4. |
-| Claude Sonnet 5 on this eval set | **untested.** The Bedrock *path* is measured (with Opus 5 on terminal-bench), the Sonnet-5-on-SWE-bench number is not. |
+| **Qwen3.5-35B-A3B anywhere in this kit** | **untested.** `config.env` defaults to it because that is what was asked for; **4B is the largest measured**. Its 72 GB of bf16 weights do not fit an 80 GB H100 alongside an FSDP shard at all, so part 4's `ENGINES`/`TP`/`GPU_MEM_UTIL` defaults were re-derived by arithmetic, not measurement — see part 4's "Scaling notes". |
+| Claude Sonnet 5 on this eval set | **\[measured\]** — 186/397 = 46.9%, the row three up. (This row used to say untested; the Bedrock path was proven on terminal-bench with Opus 5 before the SWE-bench number existed.) |
 
 This kit is a working pipeline with two known-good end-to-end runs behind it. It is
 not a benchmark report.
