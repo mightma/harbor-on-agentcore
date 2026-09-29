@@ -99,16 +99,23 @@ Parts 3 and 4 install Harbor as a package from a branch, not from PyPI:
 harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit
 ```
 
-That branch is upstream `main` plus five commits. Two are in review upstream; three
-are not yet submitted:
+That branch is upstream `main` plus five commits, none of them submitted upstream yet:
 
 | Commit | What | Upstream status |
 |---|---|---|
-| Add an Amazon Bedrock AgentCore Runtime environment | the provider itself | in PR |
-| Share images and runtimes by environment content hash | `share_by_content` | in PR (same branch) |
-| Stop the SWE-smith adapter from truncating golden patches | `.strip()` → `.strip("\n")` | in PR (separate) |
-| Let the SWEBench adapter target arm64 task images | `--arch` flag | not submitted |
-| Pin OpenBLAS to baseline ARMv8 in generated arm64 tasks | `OPENBLAS_CORETYPE` | not submitted |
+| Add an Amazon Bedrock AgentCore Runtime environment | the provider itself | **not submitted** |
+| Share images and runtimes by environment content hash | `share_by_content` | **not submitted** |
+| Stop the SWE-smith adapter from truncating golden patches | `.strip()` → `.strip("\n")` | **not submitted** |
+| Let the SWEBench adapter target arm64 task images | `--arch` flag | **not submitted** |
+| Pin OpenBLAS to baseline ARMv8 in generated arm64 tasks | `OPENBLAS_CORETYPE` | **not submitted** |
+
+**None of these are upstream yet.** An earlier version of this table said three were "in
+PR"; `gh pr list --repo harbor-framework/harbor --author <you>` returns nothing. The
+branches exist on the fork (`agentcore-share-by-content`, `swesmith-patch-strip-fix`) and
+that is all. All five still apply to current upstream `main`: it has no
+`environments/agentcore/`, `adapters/swesmith` still calls `task.patch.strip()`, and
+`adapters/swebench/utils.py` still rewrites `arm64` to `x86_64`. The fork is 129 commits
+behind, so each branch needs a rebase before it can be offered.
 
 Two of them are worth understanding before you trust a number out of this kit,
 because both failed *silently* — the mechanism ran, the reward was 0, and nothing
