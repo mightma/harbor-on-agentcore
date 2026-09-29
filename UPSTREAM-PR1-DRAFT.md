@@ -1,141 +1,111 @@
-# Draft: PR 1 — `fix(swesmith): don't truncate golden patches`
+## Summary
 
-**Raw material; rewrite the prose in your own words before posting.** Harbor's
-CONTRIBUTING puts the first and last draft of a PR description on the human. The code
-blocks below are code and were written and verified by an agent, which is fine by that
-rule; the sentences around them are not yours yet. Add the agent disclosure CONTRIBUTING
-asks for.
+`SWESmithAdapter._write_solution()` in
+`adapters/swesmith/src/swesmith_adapter/adapter.py` inserts the golden patch into
+`solve.sh` using `task.patch.strip()`.
 
-- Branch: `mightma:swesmith-patch-strip-fix` → `harbor-framework/harbor:main`
-- Head: `1c2102a`
-- Diff: 3 files, +137 / −3
+A blank context line in a unified diff is represented by a single space. When it appears
+at the end of a patch, `strip()` removes that space, leaving the final hunk shorter than
+its header declares. `git apply -R` then rejects the patch with:
 
----
-
-## What is broken
-
-`SWESmithAdapter._write_solution()` substitutes the golden patch into `solve.sh` with
-`task.patch.strip()`.
-
-A blank context line in a unified diff is **a single space**. `strip()` deletes it, which
-leaves the final hunk one line shorter than its `@@` header declares, and `git apply`
-rejects the whole patch:
-
-```
+```text
 error: corrupt patch at line N
 ```
 
-where `N` is one line past the end of the diff.
+This PR changes the rendering logic to strip newline characters only:
 
-## Reproducing it
+```python
+patch.strip("\n")
+```
 
-No Harbor needed — this is `git apply` and 20 lines of shell:
+This preserves meaningful whitespace while still keeping the heredoc terminator on its
+own line.
+
+## Reproduction
+
+A minimal example showing how a trailing blank context line is encoded. The blank line
+has to survive as *context*, so this needs a real change rather than a new file:
 
 ```bash
 rm -rf /tmp/r && mkdir /tmp/r && cd /tmp/r
 git init -q . && git config user.email a@b && git config user.name a
-printf 'fixed\n\n' > f.txt          # the file ends with a blank line
-git add -A && git commit -qm base
-printf 'broken\n\n' > f.txt         # the injected bug; the blank line is context
-patch=$(git diff)                   # the golden patch
-                                    # leave the tree broken, as a task ships it
-
-python3 - "$patch" <<'PY'
-import subprocess, sys
-patch = sys.argv[1]
-print("last line of the diff is %r" % patch.splitlines()[-1])
-for label, text in (("patch.strip('\\n')", patch.strip("\n") + "\n"),
-                    ("patch.strip()     ", patch.strip() + "\n")):
-    r = subprocess.run(["git", "apply", "-R", "-"], input=text, text=True, capture_output=True)
-    state = "fixed" if open("f.txt").read().startswith("fixed") else "still broken"
-    print(f"  git apply -R  {label} -> rc={r.returncode}  {state}  {r.stderr.strip()}")
-    open("f.txt", "w").write("broken\n\n")
-PY
+printf 'a\n\n' > f && git add f && git commit -qm base
+printf 'b\n\n' > f                  # the change; the blank line stays as context
+git diff | tail -1 | xxd | head -1
 ```
 
-```
-last line of the diff is ' '
-  git apply -R  patch.strip('\n') -> rc=0    fixed
-  git apply -R  patch.strip()      -> rc=128  still broken  error: corrupt patch at line 8
+```text
+00000000: 200a                                      .
 ```
 
-## Why it is worth fixing rather than working around
+The final line contains `20 0a`: a space followed by a newline. `strip()` removes both,
+while `strip("\n")` preserves the space. Applying the two renderings in reverse, the way
+`solve.sh` does:
 
-**`solve.sh` applies the golden patch in reverse.** SWE-smith ships each task's repository
-already broken, and the solution reverts the injected bug. So a patch that `git apply`
-refuses does not produce a loud error in one task — it makes the **oracle score 0.0**, and
-a repository whose sampled task happened to hit this looks entirely broken when only that
-one patch was mangled. That is why the bug is easy to misattribute to the task images or
-the test suites.
+```text
+strip('\n') -> rc=0
+strip()     -> rc=128   error: corrupt patch at line 8
+```
 
-How common: counting patches in
-[`SWE-bench/SWE-smith`](https://huggingface.co/datasets/SWE-bench/SWE-smith) whose final
-line is whitespace-only —
+The issue affects 8,646 of the 59,136 patches in the current SWE-smith dataset:
 
 ```python
 from datasets import load_dataset
+
 ds = load_dataset("SWE-bench/SWE-smith", split="train")
-bad = sum(1 for r in ds if (ls := r["patch"].splitlines()) and ls[-1].strip() == "")
-print(bad, len(ds))          # 8646 59136
+print(
+    sum(
+        1
+        for row in ds
+        if (lines := row["patch"].splitlines())
+        and lines[-1].strip() == ""
+    ),
+    len(ds),
+)
+# 8646 59136
 ```
 
-**8,646 of 59,136 patches (14.6%), across 216 of the dataset's 222 repositories.**
+For an affected task, the oracle solution cannot apply the golden patch and receives a
+reward of 0. The failure therefore reflects a broken solution path rather than the
+difficulty of the task.
 
-Worth being precise about the scope, since `strip()` looks harmless: it alters the end of
-*every* patch, because every patch ends in a newline. Removing that newline is fine and
-`strip("\n")` does it too. The damage is only where a whitespace-only line sits before it.
+## Changes
 
-## The fix
+- Preserve trailing whitespace-only context lines when rendering `solve.sh`.
+- Extract the rendering logic into a small helper function.
+- Add regression tests that apply the rendered patch to a real Git repository.
+- Add local pytest configuration for the SWE-smith adapter tests.
 
-Strip newlines only, in a named function so the reason has somewhere to live:
+The pytest configuration prevents these tests from inheriting the repository-level
+`testpaths`, which does not include `adapters/`. I can remove or restructure this part if
+the maintainers would prefer to handle adapter test configuration separately.
 
-```python
-def render_solve_script(template: str, patch: str) -> str:
-    return template.replace("{patch}", patch.strip("\n"))
-```
-
-`strip("\n")` rather than no stripping at all, because the template's heredoc terminator
-has to land on its own line.
-
-## Verification
-
-Five tests in `adapters/swesmith/tests/test_adapter.py`:
+## Testing
 
 ```bash
-cd adapters/swesmith && uv run pytest tests/ -q
+cd adapters/swesmith
+uv run pytest tests/ -q
 # 5 passed
 ```
 
-**Revert the one-line fix and 3 of the 5 fail**, which is the part worth checking —
-a regression test that passes either way would be decoration:
+Reverting the one-line fix causes 3 of the 5 tests to fail.
 
+Also checked with:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
 ```
-FAILED tests/test_adapter.py::test_render_preserves_trailing_blank_context_line
-FAILED tests/test_adapter.py::test_rendered_patch_reverse_applies[]
-FAILED tests/test_adapter.py::test_rendered_patch_reverse_applies[\n\n]
-3 failed, 2 passed
-```
 
-`test_rendered_patch_reverse_applies` does not compare strings: it builds a real
-repository and runs `git apply -R`, so it tests whether `solve.sh` would work rather than
-whether the implementation matches my expectations.
+The adapter tests are not currently included in the repository’s main pytest workflow,
+so they need to be run from `adapters/swesmith`.
 
-Two notes for reviewers:
+## Context
 
-- **CI does not run these.** `pytest.yml` covers `tests/` and `packages/`, not `adapters/`,
-  so the command above is the only way they execute today. Happy to wire them in
-  separately if that is wanted — it felt out of scope here.
-- The `[tool.pytest.ini_options]` added to `adapters/swesmith/pyproject.toml` exists
-  because without it pytest inherits the repo-root config, whose `testpaths` excludes
-  `adapters` and whose `asyncio_mode` needs `pytest-asyncio`. `programbench` is the only
-  other adapter with tests and does not declare it; tell me if you would rather it did not.
+I found this while working on the AgentCore Runtime environment provider discussed in
+#3446, but this bug and its fix are independent of that integration.
 
-Also checked, with the repo's own pinned ruff: `uv run ruff check .` → all checks passed,
-`uv run ruff format --check .` → 1434 files already formatted. No `CHANGELOG.md` entry,
-since CONTRIBUTING reserves it for major features and breaking changes.
+## AI assistance disclosure
 
-## Wider context, deliberately not in this PR
-
-Found while building an AgentCore Runtime sandbox provider
-([#3446](https://github.com/harbor-framework/harbor/issues/3446)). This fix is independent
-of that and stands on its own; I am not asking for them to be considered together.
+I used an AI coding agent to help implement and test this change. I reviewed the resulting
+code and wrote the final PR description.
