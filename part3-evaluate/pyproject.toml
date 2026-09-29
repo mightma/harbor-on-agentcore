@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     # Harbor from the kit branch; released Harbor has no agentcore provider.
-    "harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit",
+    "harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit-v1",
     # Reporting only. Results are written to disk regardless; wandb is optional at
     # runtime (scripts skip it when WANDB_API_KEY is unset).
     "wandb>=0.27",

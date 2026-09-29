@@ -13,8 +13,8 @@ use: `swegym`, `multi-swe-bench`, `swebenchpro`, `swebench_multilingual`, `swela
 `swtbench`. Part 1 depends on exactly two of them as packages:
 
 ```toml
-"harbor-swesmith-adapter @ git+.../harbor@acr-kit#subdirectory=adapters/swesmith",
-"harbor-swebench-adapter @ git+.../harbor@acr-kit#subdirectory=adapters/swebench",
+"harbor-swesmith-adapter @ git+.../harbor@acr-kit-v1#subdirectory=adapters/swesmith",
+"harbor-swebench-adapter @ git+.../harbor@acr-kit-v1#subdirectory=adapters/swebench",
 ```
 
 `swebench/tasks.sh` drives one adapter's CLI and `swesmith/tasks.py` drives the other's

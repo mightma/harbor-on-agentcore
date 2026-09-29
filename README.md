@@ -93,13 +93,22 @@ Other hard service limits, all of them design constraints rather than bugs:
 
 ## The Harbor build this uses
 
-Parts 3 and 4 install Harbor as a package from a branch, not from PyPI:
+Every part installs Harbor as a package from a **tag**, not from PyPI and not from a
+branch:
 
 ```
-harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit
+harbor[agentcore] @ git+https://github.com/mightma/harbor@acr-kit-v1
+                                                          ^^^^^^^^^^ 4ee0cb25999bfbcb…
 ```
 
-That branch is upstream `main` plus five commits, none of them submitted upstream yet:
+The tag is the point. It used to be `@acr-kit`, a branch — and a branch is a moving
+reference, so the moment that branch is rebased to follow upstream review, everyone who
+followed this README installs something other than the code these numbers were measured
+against. `acr-kit-v1` is frozen at `4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df` and will
+not move; rebasing happens on the branch. The four `uv.lock` files record the same
+commit, so `uv sync` is reproducible even if the tag were deleted.
+
+That tag is upstream `main` plus five commits, none of them submitted upstream yet:
 
 | Commit | What | Upstream status |
 |---|---|---|
@@ -116,6 +125,24 @@ that is all. All five still apply to current upstream `main`: it has no
 `environments/agentcore/`, `adapters/swesmith` still calls `task.patch.strip()`, and
 `adapters/swebench/utils.py` still rewrites `arm64` to `x86_64`. The fork is 129 commits
 behind, so each branch needs a rebase before it can be offered.
+
+### If you are here to reproduce the work rather than to review it
+
+Install the tag above and everything in this repo applies as written. The four PRs these
+commits are being split into are the *merge* path, not the reproduction path — no single
+one of them gives you a working stack, and reviewers want them small. Upstream serves
+both: a fork PR's head is fetchable from the official repository without knowing the
+fork exists,
+
+```bash
+git fetch https://github.com/harbor-framework/harbor refs/pull/<N>/head
+```
+
+which is how someone who finds one PR can get exactly the code under review. Harbor's
+[CONTRIBUTING](https://github.com/harbor-framework/harbor/blob/main/CONTRIBUTING.md) also
+requires that an integration be one a *user* asked for, so the upstream issue making that
+request is the natural index: it links the four PRs and this repo, and unlike a PR it does
+not go stale while review waits.
 
 Two of them are worth understanding before you trust a number out of this kit,
 because both failed *silently* — the mechanism ran, the reward was 0, and nothing

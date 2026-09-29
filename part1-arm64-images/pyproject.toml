@@ -24,8 +24,8 @@ dependencies = [
     # The two Harbor adapters, installed as packages from the kit branch so the
     # SWE-smith patch fix and the SWE-bench --arch flag are both present. See the
     # top-level README for what each carries.
-    "harbor-swesmith-adapter @ git+https://github.com/mightma/harbor@acr-kit#subdirectory=adapters/swesmith",
-    "harbor-swebench-adapter @ git+https://github.com/mightma/harbor@acr-kit#subdirectory=adapters/swebench",
+    "harbor-swesmith-adapter @ git+https://github.com/mightma/harbor@acr-kit-v1#subdirectory=adapters/swesmith",
+    "harbor-swebench-adapter @ git+https://github.com/mightma/harbor@acr-kit-v1#subdirectory=adapters/swebench",
 ]
 
 [dependency-groups]

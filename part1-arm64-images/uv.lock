@@ -858,7 +858,7 @@ wheels = [
 [[package]]
 name = "harbor-swebench-adapter"
 version = "0.1.0"
-source = { git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswebench&rev=acr-kit#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
+source = { git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswebench&rev=acr-kit-v1#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
 dependencies = [
     { name = "swebench" },
 ]
@@ -866,7 +866,7 @@ dependencies = [
 [[package]]
 name = "harbor-swesmith-adapter"
 version = "0.1.0"
-source = { git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswesmith&rev=acr-kit#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
+source = { git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswesmith&rev=acr-kit-v1#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
 dependencies = [
     { name = "datasets" },
     { name = "swesmith" },
@@ -1875,8 +1875,8 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.48" },
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "docker", specifier = ">=7.1.0" },
-    { name = "harbor-swebench-adapter", git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswebench&rev=acr-kit" },
-    { name = "harbor-swesmith-adapter", git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswesmith&rev=acr-kit" },
+    { name = "harbor-swebench-adapter", git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswebench&rev=acr-kit-v1" },
+    { name = "harbor-swesmith-adapter", git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswesmith&rev=acr-kit-v1" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "requests", specifier = ">=2.32" },
     { name = "swebench", specifier = "==4.1.0" },

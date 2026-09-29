@@ -716,7 +716,7 @@ wheels = [
 [[package]]
 name = "harbor"
 version = "0.23.0"
-source = { git = "https://github.com/mightma/harbor?rev=acr-kit#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
+source = { git = "https://github.com/mightma/harbor?rev=acr-kit-v1#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
 dependencies = [
     { name = "dirhash" },
     { name = "fastapi" },
@@ -1297,7 +1297,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "harbor", extras = ["agentcore"], git = "https://github.com/mightma/harbor?rev=acr-kit" }]
+requires-dist = [{ name = "harbor", extras = ["agentcore"], git = "https://github.com/mightma/harbor?rev=acr-kit-v1" }]
 
 [[package]]
 name = "pathspec"
