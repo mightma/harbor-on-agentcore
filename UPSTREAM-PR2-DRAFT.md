@@ -42,7 +42,8 @@ This failure is otherwise easy to miss: the test process exits without producing
 - Normalize the image namespace in either direction, independent of the host running the adapter.
 - Reject unsupported architecture values.
 - Add `OPENBLAS_CORETYPE=ARMV8` to generated arm64 Dockerfiles.
-- Add offline tests for architecture selection and Dockerfile generation.
+- Refuse `--arch arm64` over the whole dataset, since published arm64 coverage is partial; the caller passes `--task-ids`/`--instance-id`, or `--allow-unpublished-images` if they build the missing images themselves.
+- Add offline tests for architecture selection, Dockerfile generation, and that refusal.
 
 When `--arch` is omitted, the generated x86 task output is unchanged.
 
@@ -53,12 +54,12 @@ The tests construct SWE-bench rows locally and do not download the dataset:
 ```bash
 cd adapters/swebench
 uv run pytest tests/ -q
-# 5 passed
+# 6 passed
 ```
 
 The architecture test simulates the adapter running on both x86 and arm64 hosts and verifies that the generated image namespace follows `--arch` regardless of the host, for both values of the flag. That is the property the unconditional rewrite already provided for x86, and the half most easily lost when making it configurable.
 
-Regression coverage includes both parts of the change: restoring the unconditional x86 replacement or removing the arm64 OpenBLAS pin causes the corresponding tests to fail.
+Regression coverage includes all three parts of the change: restoring the unconditional x86 replacement, removing the arm64 OpenBLAS pin, or dropping the whole-dataset refusal each causes the corresponding test to fail.
 
 Also checked with:
 
