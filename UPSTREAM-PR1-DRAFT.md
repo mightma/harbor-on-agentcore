@@ -31,14 +31,14 @@ rm -rf /tmp/r && mkdir /tmp/r && cd /tmp/r
 git init -q . && git config user.email a@b && git config user.name a
 printf 'a\n\n' > f && git add f && git commit -qm base
 printf 'b\n\n' > f                  # the change; the blank line stays as context
-git diff | tail -1 | xxd | head -1
+git diff | tail -1 | xxd -g 1 | head -1
 ```
 
 ```text
-00000000: 200a                                      .
+00000000: 20 0a                                             .
 ```
 
-The final line contains `20 0a`: a space followed by a newline. `strip()` removes both,
+The final line is the two bytes `20 0a`: a space followed by a newline. `strip()` removes both,
 while `strip("\n")` preserves the space. Applying the two renderings in reverse, the way
 `solve.sh` does:
 
