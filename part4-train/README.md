@@ -344,6 +344,64 @@ Async also needs a different entrypoint (`main_harbor_fully_async`, which swaps 
 because `BasePPOExp.get_trainer()` hardcodes the synchronous trainer. `run_train.sh`
 selects the entrypoint from `ASYNC`.
 
+## What the first real run showed, and what to change
+
+**\[measured\]** Qwen3.5-35B-A3B, async, 257 steps, 16,611 completed rollouts:
+SWE-bench Verified went from **20.2% to 28.7%**. That is +8.5 points against a
+±1.8-point single-run noise floor (part 3), so it is a real effect.
+
+The reward curve got there unsteadily, though — reconstructed from the trials on disk,
+bucketed into twentieths by start time:
+
+```
+ 1  18.4%   ####### 
+ 5  37.2%   ###############
+11  45.2%   ##################
+13  29.9%   ############        <- ~17 points lost, then recovered
+16  59.0%   ########################
+20  61.9%   #########################
+```
+
+**It is not task-mix noise.** SWE-smith bug types differ enormously in solvability
+(`func_pm_ctrl_shuffle` 58.5%, `combine_module` 16.3%), so an unlucky draw could explain
+a dip. Scoring each bucket against the rate its own type mix predicts gives a flat
+36.3–42.2% expectation, so the dip is the policy regressing.
+
+**It is also not the learning rate.** The config dump shows two, and the one that applies
+to the policy is `1.0e-06`; the `5.0e-06` belongs to the critic block, which GRPO
+(`advantage_estimator: grpo`) never builds.
+
+What it is: **48.3% of GRPO groups had zero variance** — 34.6% scored all-0, 13.7% all-1
+across 2,060 groups. A group whose rewards are equal has advantage 0 for every sample, so
+at `BATCH=8` the gradient came from about **4 live prompts per step**. Two settings now
+exist for that, and they fix different halves:
+
+| Setting | What it does | Cost |
+|---|---|---|
+| `ZERO_VARIANCE_FILTER=true` | Loss-masks dead groups. They gave no gradient anyway; what changes is the denominator — with `loss_reduction=token_mean` their tokens were in it, so the gradient was scaled by a dead fraction that **moves every step**, i.e. a randomly varying effective learning rate | none |
+| `SAMPLE_FULL_BATCH=true` | Keeps pulling until the batch holds `BATCH` *live* groups (async-native DAPO filtering). Restores the batch size rather than just its scaling | the discarded rollouts — at a 48% dead rate, filling 8 live groups generates ~15 |
+
+`SAMPLE_FULL_BATCH` is async-only and requires the filter; `run_train.sh` refuses both
+mistakes before the engines start.
+
+One more source of noise worth removing: **172 of the 16,611 trials died at exactly 600 s**
+in the verifier, which is `VERIFIER_TIMEOUT`. Those are reward 0 for a reason the policy
+cannot affect — 1% label noise straight into the gradient. SWE-smith runs a whole test
+suite where SWE-bench runs selected tests, so it wants more than SWE-bench's 600.
+
+So the next run:
+
+```bash
+ZERO_VARIANCE_FILTER=true SAMPLE_FULL_BATCH=true \
+BATCH=32 CONCURRENCY=128 \
+USE_KL_LOSS=true VERIFIER_TIMEOUT=900 \
+MAX_STEPS=256 scripts/run_train.sh
+```
+
+`USE_KL_LOSS=true` is the one judgement call in that line rather than a measurement:
+nothing currently anchors the policy, and with `rollout_is` over rollouts up to
+`max_staleness_steps` old, a regression has nothing pulling back against it.
+
 ## Swapping AgentCore for local docker
 
 ```bash

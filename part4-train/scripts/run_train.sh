@@ -131,6 +131,35 @@ export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 # initialise and then NCCL segfaults inside commAlloc() on the first collective.
 export NCCL_NET_PLUGIN="${NCCL_NET_PLUGIN:-none}"
 
+# A GRPO group whose rewards are all equal has advantage 0 for every sample in it,
+# so it contributes no gradient. **[measured]** on the first real run
+# (BATCH=8, N_SAMPLES=8, 2,060 groups): 34.6% of groups scored all-0, 13.7% all-1 --
+# **48.3% of rollouts bought nothing**, and the two knobs below fix different halves
+# of that.
+#
+#   ZERO_VARIANCE_FILTER  loss-masks the dead groups. They contributed no gradient
+#     anyway; what this changes is the *denominator*. With loss_reduction=token_mean
+#     their tokens are in it, so the gradient is scaled down by the dead fraction --
+#     and that fraction moves from step to step, which is a randomly varying
+#     effective learning rate. The measured run left this off and its reward curve
+#     regressed ~17 points mid-training before recovering.
+#
+#   SAMPLE_FULL_BATCH  keeps pulling groups until the batch holds BATCH *live* ones
+#     (async-native DAPO dynamic_sampling="filter"). This is what restores the batch
+#     size rather than just its scaling. It costs the rollouts it discards -- at a
+#     48% dead rate, filling 8 live groups generates about 15 -- so it buys gradient
+#     quality with wall clock. Async only, and SkyRL asserts it needs the filter.
+ZERO_VARIANCE_FILTER="${ZERO_VARIANCE_FILTER:-false}"
+SAMPLE_FULL_BATCH="${SAMPLE_FULL_BATCH:-false}"
+
+# The verifier's cap, not the agent's. **[measured]** 172 of 16,611 trials in the
+# first run died at exactly 600 s here -- reward 0 for a reason the policy cannot
+# affect, i.e. 1% label noise straight into the gradient. SWE-smith runs a whole
+# test suite where SWE-bench runs selected tests, so it wants more than SWE-bench's
+# 600. Raising it trades that noise against holding a rollout slot longer, and a
+# step cannot close until every trajectory in it is in.
+VERIFIER_TIMEOUT="${VERIFIER_TIMEOUT:-600}"
+
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_TURNS="${MAX_TURNS:-8}"
 MAX_STEPS="${MAX_STEPS:-20}"
@@ -244,6 +273,18 @@ if [ "$ASYNC" = "1" ]; then
     echo "  BATCH=$BATCH GEN_WORKERS=$GEN_WORKERS MAX_STALENESS=$MAX_STALENESS" >&2
     exit 1
   fi
+  # SkyRL asserts this too, but only after the engines are up and a step of
+  # rollouts has been paid for.
+  if [ "$SAMPLE_FULL_BATCH" = "true" ] && [ "$ZERO_VARIANCE_FILTER" != "true" ]; then
+    echo "SAMPLE_FULL_BATCH=true needs ZERO_VARIANCE_FILTER=true -- it is the filter" >&2
+    echo "that identifies the groups it drops." >&2
+    exit 1
+  fi
+elif [ "$SAMPLE_FULL_BATCH" = "true" ]; then
+  echo "SAMPLE_FULL_BATCH is a fully-async setting and ASYNC=0 was requested." >&2
+  echo "Under ASYNC=0, ZERO_VARIANCE_FILTER alone still fixes the gradient scaling;" >&2
+  echo "what you lose is refilling the batch with live groups." >&2
+  exit 1
 elif [ "$((ENGINES * TP))" -ne "$POLICY_GPUS" ]; then
   # Colocated: the engine grid has to land exactly on the policy's GPUs.
   echo "ENGINES*TP ($ENGINES*$TP) must equal POLICY_GPUS ($POLICY_GPUS)" >&2
@@ -362,6 +403,7 @@ if [ "$ASYNC" = "1" ]; then
     # stay valid, and re-prefilling every in-flight rollout on every step is what
     # async is trying to avoid.
     trainer.fully_async.clear_kv_cache_on_weight_sync=false
+    trainer.fully_async.sample_full_batch="$SAMPLE_FULL_BATCH"
     trainer.placement.colocate_all=false
   )
 else
@@ -376,6 +418,7 @@ exec uv run --extra fsdp --extra harbor -m "$ENTRYPOINT" \
   data.val_data="['$RL_EVAL_DATA']" \
   harbor_trial_config.trials_dir="$OUT/trials" \
   harbor_trial_config.environment.kwargs.execution_role_arn="$ACR_EXECUTION_ROLE_ARN" \
+  harbor_trial_config.verifier.override_timeout_sec="$VERIFIER_TIMEOUT" \
   harbor_trial_config.agent.kwargs.max_turns="$MAX_TURNS" \
   harbor_trial_config.agent.kwargs.model_info.max_input_tokens="$MAX_MODEL_LEN" \
   trainer.policy.model.path="$MODEL" \
@@ -401,6 +444,7 @@ exec uv run --extra fsdp --extra harbor -m "$ENTRYPOINT" \
   trainer.algorithm.use_kl_loss="$USE_KL_LOSS" \
   trainer.algorithm.loss_reduction=token_mean \
   trainer.algorithm.grpo_norm_by_std=false \
+  trainer.algorithm.zero_variance_filter="$ZERO_VARIANCE_FILTER" \
   trainer.algorithm.max_seq_len="$MAX_MODEL_LEN" \
   trainer.algorithm.off_policy_correction.tis_ratio_type=token \
   trainer.algorithm.off_policy_correction.token_tis_ratio_clip_high=2.0 \
