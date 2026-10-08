@@ -7,14 +7,14 @@ whichever one you bring instead.
 ## Step 0 · does your dataset already have an adapter?
 
 Turning a dataset into Harbor tasks is not this kit's job, and you should not write
-that code. Harbor's own [`adapters/`](https://github.com/harbor-framework/harbor/tree/main/adapters)
-directory holds **85 of them** — including several SWE-shaped ones this kit does not
+that code. Harbor's own adapters live in [harbor-framework/adapters](https://github.com/harbor-framework/adapters/tree/main/src),
+which holds **85 of them** — including several SWE-shaped ones this kit does not
 use: `swegym`, `multi-swe-bench`, `swebenchpro`, `swebench_multilingual`, `swelancer`,
 `swtbench`. Part 1 depends on exactly two of them as packages:
 
 ```toml
-"harbor-swesmith-adapter @ git+.../harbor@acr-kit-v1#subdirectory=adapters/swesmith",
-"harbor-swebench-adapter @ git+.../harbor@acr-kit-v1#subdirectory=adapters/swebench",
+"harbor-swesmith-adapter @ git+.../adapters@6530140…#subdirectory=src/swesmith",  # adapters#23
+"harbor-swebench-adapter @ git+.../adapters@8e27af8…#subdirectory=src/swebench",  # adapters#22
 ```
 
 `swebench/tasks.sh` drives one adapter's CLI and `swesmith/tasks.py` drives the other's
@@ -25,13 +25,14 @@ registry *from outside*, so the adapter stays exactly as upstream ships it.
 ```
 你的数据集有 adapter 吗?
 ├── 有         -> generate task dirs with it, then continue below
-└── 没有       -> write one: NAME + generate_task() + run() (adapters/<any> is the model)
+└── 没有       -> write one: NAME + generate_task() + run() (adapters/src/<any> is the model)
 ```
 
 The one change this kit needed *inside* an adapter is `--arch` on the SWE-bench one:
 upstream hardcodes `spec.instance_image_key.replace("arm64", "x86_64")` because
-`make_test_spec` infers the architecture from whichever machine runs the adapter. That
-lives on the fork branch and belongs upstream (see the top-level README's commit table).
+`make_test_spec` infers the architecture from whichever machine runs the adapter. It is
+open upstream as [adapters#22](https://github.com/harbor-framework/adapters/pull/22) (see
+the top-level README's commit table).
 
 **What this part adds is downstream of the adapter**, and it is all ACR-shaped: the
 adapter emits one task dir per instance with its own `environment/Dockerfile`, and on a
@@ -48,7 +49,7 @@ part1-arm64-images/
 └── swesmith/   build.sh, build_images.py, prepare_images.py, tasks.py, tasks.sh, data/
 ```
 
-One directory per dataset, the same shape as `adapters/<dataset>/`, so **adding a
+One directory per dataset, the same shape as `adapters/src/<dataset>/`, so **adding a
 dataset is adding a directory** — its own builder, its own task generator, its own
 durable manifests — with `shared/` holding only what is genuinely general. Both
 directories share one `uv` environment (`pyproject.toml` at this level), because both

@@ -65,8 +65,8 @@ Measured by probing registry manifests one by one:
 Every ready-made arm64 SWE image in existence is those 281. So:
 
 (Note what this is *not* about: converting a dataset into Harbor tasks is
-[`adapters/`](https://github.com/harbor-framework/harbor/tree/main/adapters)' job and
-there are 85 of them, two of which this kit installs as packages. Part 1 is about the
+the job of [harbor-framework/adapters](https://github.com/harbor-framework/adapters/tree/main/src),
+which holds 85 of them, two of which this kit installs as packages. Part 1 is about the
 images those generated tasks point at, which is where arm64 bites.)
 
 - **SWE-bench Verified is the test set, whole and unsplit.** 281 of its 500 instances
@@ -93,7 +93,7 @@ Other hard service limits, all of them design constraints rather than bugs:
 
 ## The Harbor build this uses
 
-Every part installs Harbor as a package from a **tag**, not from PyPI and not from a
+Parts 2–4 install Harbor as a package from a **tag**, not from PyPI and not from a
 branch:
 
 ```
@@ -105,26 +105,32 @@ The tag is the point. It used to be `@acr-kit`, a branch — and a branch is a m
 reference, so the moment that branch is rebased to follow upstream review, everyone who
 followed this README installs something other than the code these numbers were measured
 against. `acr-kit-v1` is frozen at `4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df` and will
-not move; rebasing happens on the branch. The four `uv.lock` files record the same
+not move; rebasing happens on the branch. The three `uv.lock` files record the same
 commit, so `uv sync` is reproducible even if the tag were deleted.
 
-That tag is upstream `main` plus five commits, none of them submitted upstream yet:
+That tag is upstream `main` plus five commits. Harbor has since moved its adapters out
+into [harbor-framework/adapters](https://github.com/harbor-framework/adapters), so the
+three adapter commits are now offered there, and part 1 installs the two adapters from
+there too — each pinned by SHA to the head of its open PR on the fork
+(`mightma/adapters`), not from this tag:
 
 | Commit | What | Upstream status |
 |---|---|---|
-| Add an Amazon Bedrock AgentCore Runtime environment | the provider itself | **not submitted** |
+| Add an Amazon Bedrock AgentCore Runtime environment | the provider itself | **not submitted** as a PR; proposed in harbor#3446 |
 | Share images and runtimes by environment content hash | `share_by_content` | **not submitted** |
-| Stop the SWE-smith adapter from truncating golden patches | `.strip()` → `.strip("\n")` | **not submitted** |
-| Let the SWEBench adapter target arm64 task images | `--arch` flag | **not submitted** |
-| Pin OpenBLAS to baseline ARMv8 in generated arm64 tasks | `OPENBLAS_CORETYPE` | **not submitted** |
+| Stop the SWE-smith adapter from truncating golden patches | `.strip()` → `.strip("\n")` | **open**: [adapters#23](https://github.com/harbor-framework/adapters/pull/23) (moved from harbor#3448) |
+| Let the SWEBench adapter target arm64 task images | `--arch` flag | **open**: [adapters#22](https://github.com/harbor-framework/adapters/pull/22) (moved from harbor#3449) |
+| Pin OpenBLAS to baseline ARMv8 in generated arm64 tasks | `OPENBLAS_CORETYPE` | same PR, adapters#22 |
 
-**None of these are upstream yet.** An earlier version of this table said three were "in
-PR"; `gh pr list --repo harbor-framework/harbor --author <you>` returns nothing. The
-branches exist on the fork (`agentcore-share-by-content`, `swesmith-patch-strip-fix`) and
-that is all. All five still apply to current upstream `main`: it has no
-`environments/agentcore/`, `adapters/swesmith` still calls `task.patch.strip()`, and
-`adapters/swebench/utils.py` still rewrites `arm64` to `x86_64`. The fork is 129 commits
-behind, so each branch needs a rebase before it can be offered.
+adapters#22 also carries a commit the tag predates: `--arch arm64` refuses to run without
+an explicit id list. `part1-arm64-images/swebench/tasks.sh` always passes `--task-ids`,
+so part 1 is unaffected. Apart from that guard and the CLI's default output directory
+(part 1 always passes one), the adapter code part 1 now installs is identical to what
+the tag carried.
+
+**None of these are merged yet.** The two Harbor-side commits still apply to current
+upstream `main`, which has no `environments/agentcore/`. The fork is 129 commits behind,
+so each needs a rebase before it can be offered.
 
 ### If you are here to reproduce the work rather than to review it
 

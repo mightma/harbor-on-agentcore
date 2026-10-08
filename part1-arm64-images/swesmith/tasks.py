@@ -11,7 +11,7 @@ the tasks point at them.
 Harbor's swesmith adapter names each task's base image through the profile
 registry::
 
-    # harbor/adapters/swesmith/src/swesmith_adapter/utils.py
+    # adapters/src/swesmith/src/swesmith_adapter/utils.py
     rp = registry.get_from_inst(sample)
     id_to_image[sample["instance_id"]] = rp.image_name
 

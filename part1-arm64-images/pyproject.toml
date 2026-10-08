@@ -6,9 +6,9 @@ requires-python = ">=3.13"
 
 # swesmith and swebench are pinned, not floated, and both pins are load-bearing:
 #
-#   swesmith 0.0.6  must match harbor/adapters/swesmith, because the image names
-#                   this builds are the names that adapter's generated tasks
-#                   reference. A different swesmith renames the images and the
+#   swesmith 0.0.6  must match the swesmith adapter's own pin, because the
+#                   image names this builds are the names that adapter's
+#                   generated tasks reference. A different swesmith renames the images and the
 #                   tasks point at nothing.
 #   swebench 4.1.0  the adapter imports LATEST from swebench.harness.constants,
 #                   which 5.x removed.
@@ -21,11 +21,13 @@ dependencies = [
     "boto3>=1.43.48",
     "pandas>=2.0",
     "requests>=2.32",
-    # The two Harbor adapters, installed as packages from the kit branch so the
-    # SWE-smith patch fix and the SWE-bench --arch flag are both present. See the
-    # top-level README for what each carries.
-    "harbor-swesmith-adapter @ git+https://github.com/mightma/harbor@acr-kit-v1#subdirectory=adapters/swesmith",
-    "harbor-swebench-adapter @ git+https://github.com/mightma/harbor@acr-kit-v1#subdirectory=adapters/swebench",
+    # The two Harbor adapters, from harbor-framework/adapters (they moved out of
+    # the harbor repo). Each is pinned to the head commit of its open upstream PR
+    # on the fork -- adapters#23 carries the SWE-smith patch fix, adapters#22 the
+    # SWE-bench --arch flag -- by SHA, so neither can move. See the top-level
+    # README for what each carries; repin to upstream once both merge.
+    "harbor-swesmith-adapter @ git+https://github.com/mightma/adapters@6530140947414ac1f9954d51e24da5edf590d777#subdirectory=src/swesmith",
+    "harbor-swebench-adapter @ git+https://github.com/mightma/adapters@8e27af8513c1de461fe5a0eaa68faeefc346970f#subdirectory=src/swebench",
 ]
 
 [dependency-groups]

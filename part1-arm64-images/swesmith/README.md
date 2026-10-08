@@ -1,6 +1,6 @@
 # SWE-smith · arm64
 
-One directory per dataset, the same shape as Harbor's `adapters/<dataset>/`. This one
+One directory per dataset, the same shape as Harbor's `adapters/src/<dataset>/`. This one
 holds everything specific to SWE-smith; `../shared/` holds what is not.
 
 | File | What it is |

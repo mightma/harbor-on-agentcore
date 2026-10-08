@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -858,7 +858,7 @@ wheels = [
 [[package]]
 name = "harbor-swebench-adapter"
 version = "0.1.0"
-source = { git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswebench&rev=acr-kit-v1#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
+source = { git = "https://github.com/mightma/adapters?subdirectory=src%2Fswebench&rev=8e27af8513c1de461fe5a0eaa68faeefc346970f#8e27af8513c1de461fe5a0eaa68faeefc346970f" }
 dependencies = [
     { name = "swebench" },
 ]
@@ -866,7 +866,7 @@ dependencies = [
 [[package]]
 name = "harbor-swesmith-adapter"
 version = "0.1.0"
-source = { git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswesmith&rev=acr-kit-v1#4ee0cb25999bfbcb59a27c9e3e71b4c1f187f2df" }
+source = { git = "https://github.com/mightma/adapters?subdirectory=src%2Fswesmith&rev=6530140947414ac1f9954d51e24da5edf590d777#6530140947414ac1f9954d51e24da5edf590d777" }
 dependencies = [
     { name = "datasets" },
     { name = "swesmith" },
@@ -1875,8 +1875,8 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.48" },
     { name = "datasets", specifier = ">=4.0.0" },
     { name = "docker", specifier = ">=7.1.0" },
-    { name = "harbor-swebench-adapter", git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswebench&rev=acr-kit-v1" },
-    { name = "harbor-swesmith-adapter", git = "https://github.com/mightma/harbor?subdirectory=adapters%2Fswesmith&rev=acr-kit-v1" },
+    { name = "harbor-swebench-adapter", git = "https://github.com/mightma/adapters?subdirectory=src%2Fswebench&rev=8e27af8513c1de461fe5a0eaa68faeefc346970f" },
+    { name = "harbor-swesmith-adapter", git = "https://github.com/mightma/adapters?subdirectory=src%2Fswesmith&rev=6530140947414ac1f9954d51e24da5edf590d777" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "requests", specifier = ">=2.32" },
     { name = "swebench", specifier = "==4.1.0" },
