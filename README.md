@@ -88,8 +88,80 @@ Other hard service limits, all of them design constraints rather than bugs:
 | Image size | 2048 MB **compressed** | prepared SWE-smith images land at ~907 MB |
 | Session shape | 2 vCPU / 8 GB / 8.8 GB disk | fixed; `override_cpus` is ignored |
 | Max single command | 1 hour | a long pytest suite needs `exec_timeout_sec: 3600` |
+| Max single request | 15 minutes, however much the command prints | **\[measured\]** on `acr-kit-v1` a command still running at 15:00 fails with `EventStreamError`; the upstream branch runs commands allowed longer detached and polls them |
 | Runtimes per account | 1,000 (default) | see "Runtime budget" below |
 | Networking | single container, no egress control | cannot air-gap a task |
+
+## What one trial does, and how it finds its image and runtime
+
+Nothing is found by searching. Every name is *computed*: the ECR tag from the task's
+environment contents, the runtime name from the image URI. So any process on any host
+arrives at the same tag and runtime name for the same task. That is the whole reason
+images are built once and runtimes can be kept warm between runs.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as Harbor trial
+    participant D as local docker
+    participant E as ECR (harbor-agentcore)
+    participant C as AgentCore control plane
+    participant V as session microVM
+
+    Note over T: tag = task-contenthash-arm64<br/>contenthash = SHA-256 of environment/
+    T->>E: DescribeImages(tag)
+    opt tag missing (first run, or --force-build)
+        T->>D: docker build --platform linux/arm64 environment/
+        T->>D: docker build: shim layer on top, CMD = shim
+        D->>E: docker push :tag
+    end
+
+    Note over T: runtime name = hb_task_hash(image URI)
+    T->>C: CreateAgentRuntime(name, image URI, execution role)
+    alt name already exists (kept by an earlier run)
+        C-->>T: ConflictException
+        T->>C: look up by name, adopt its ARN
+    else created
+        loop until READY, about 30-40 s
+            T->>C: GetAgentRuntime
+        end
+    end
+
+    T->>V: InvokeAgentRuntime action=start (new session id)
+    Note over V: microVM boots from the image,<br/>shim on :8080 reports HealthyBusy
+    T->>V: InvokeAgentRuntimeCommand (agent, then verifier)
+    T->>V: StopRuntimeSession
+    opt last trial on this runtime, and delete_runtime = true
+        T->>C: DeleteAgentRuntime
+    end
+```
+
+Two things the diagram leaves out. Trials of the same task in one Harbor process share
+the runtime through a reference-counted lease, so only the first of them does steps
+5–8. And two kwargs skip whole stretches: `--ek image_uri=<uri>` starts at step 5
+with that image, and `--ek runtime_arn=<arn>` starts at step 9 on that runtime.
+
+| Resource | Name | Comes from | Code (`src/harbor/environments/agentcore/`) |
+|---|---|---|---|
+| Task image | `<account>.dkr.ecr.<region>.amazonaws.com/harbor-agentcore:<task>-<hash>-arm64` | SHA-256 of every file under the task's `environment/` | `image.py`: `image_tag`, `build_and_push` |
+| Runtime | `hb_<task>_<hash>`, or `hb_<hash>` with `share_by_content` | hash of the image URI | `runtime.py`: `runtime_name`, `RuntimeManager.acquire` |
+| Session | `<trial name>-<uuid>` | invented per trial | `client.py`: `new_session_id` |
+
+What a second run of the same tasks pays:
+
+| | First run | Rerun, `delete_runtime=true` (default) | Rerun, `delete_runtime=false` |
+|---|---|---|---|
+| Image | build + push (minutes; hours under qemu) | reused from ECR | reused from ECR |
+| Runtime | create, wait for READY | created again | adopted by name |
+| Session | open | open | open (**\[measured\]** warm session start 3 s median; hot session open 0.4 s) |
+
+This is how parts 2–4 fit together: part 2's `deploy_runtimes.sh` does the first run
+with `share_by_content=true` and `delete_runtime=false`, and parts 3 and 4 pass the
+same two kwargs so every trial lands in the reuse column.
+
+One gap to know about. The tag covers the task's `environment/`, **not the shim**,
+so a change to `shim/main.go` alone does not rebuild anything: the old images keep
+the old shim until you pass `--force-build`.
 
 ## The Harbor build this uses
 
