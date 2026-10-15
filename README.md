@@ -229,9 +229,13 @@ looked broken:
 - **`share_by_content`.** Harbor keys a runtime on
   `environment_content_hash(environment_dir, docker_image)`. The upstream SWE-smith
   adapter writes the per-task `git checkout` into the task's own Dockerfile, so all
-  45,844 tasks hash differently and each would deploy its own runtime. This flag keys
-  purely on content, collapsing them to **122 runtimes**. Without it you hit the
-  1,000-runtime quota almost immediately.
+  45,844 tasks hash differently and each would deploy its own runtime. Two things
+  together collapse them to **122 runtimes**, and neither is enough alone.
+  [`part1-arm64-images/shared/task_sharing.py`](part1-arm64-images/shared/task_sharing.py)
+  rewrites the tasks so that every task of a repository has the same environment:
+  the Dockerfile goes, and the checkout moves to the healthcheck, outside the hash.
+  The flag then drops the task name from the image tag and the runtime name.
+  Without both you hit the 1,000-runtime quota almost immediately.
 - **`OPENBLAS_CORETYPE`.** `import numpy` SIGILLs inside an ACR session on some
   builds, so every reward was 0 while the training loop happily reported steps. A
   dead reward path looks exactly like a hard benchmark.
